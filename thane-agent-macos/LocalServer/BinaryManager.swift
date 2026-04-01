@@ -11,22 +11,6 @@ import os
 ///
 /// Future: download/update from GitHub release assets, auto-restart on crash,
 /// SMAppService for Login Item integration.
-/// How broadly thane-agent-macos probes for file access permissions on startup.
-/// Probing triggers macOS TCC dialogs upfront rather than during thane operation.
-enum FileAccessScope: String, CaseIterable {
-    case workspaceOnly  = "workspaceOnly"   // only the configured workspace directory
-    case homeDirectory  = "homeDirectory"   // workspace + ~/Desktop/Documents/Downloads
-    case fullDisk       = "fullDisk"        // same probe as homeDirectory; user must grant FDA manually
-
-    var label: String {
-        switch self {
-        case .workspaceOnly: "Workspace Only"
-        case .homeDirectory: "Home Directory"
-        case .fullDisk:      "Full Disk Access"
-        }
-    }
-}
-
 /// Subset of thane's config.yaml relevant to the macOS app.
 /// Parsed on a best-effort basis — always falls back to defaults.
 struct LocalThaneConfig {
@@ -127,15 +111,6 @@ final class BinaryManager {
         set { UserDefaults.standard.set(newValue, forKey: "localServerShouldRun") }
     }
 
-    /// File access scope for the proactive TCC permission probe. Persisted.
-    var fileAccessScope: FileAccessScope {
-        get {
-            FileAccessScope(rawValue: UserDefaults.standard.string(forKey: "fileAccessScope") ?? "")
-                ?? .homeDirectory
-        }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "fileAccessScope") }
-    }
-
     // MARK: - Discovery
 
     /// Canonical location for managed installs (future: downloaded from GitHub).
@@ -176,39 +151,15 @@ final class BinaryManager {
     // MARK: - Lifecycle
 
     /// Called by AppState after registering onStateChange, so the callback is ready before any auto-start.
-    /// Always probes file access when a binary is configured, regardless of shouldRun.
+    /// Probes the workspace directory at startup — a hard failure if inaccessible — then auto-starts
+    /// if the server was running when the app last quit. All other TCC probing is user-initiated
+    /// via the Permissions settings tab.
     func autoStartIfNeeded() {
-        if binaryURL != nil { probeFileAccess() }
+        let workspace = workspaceURL
+        Task.detached { _ = try? FileManager.default.contentsOfDirectory(atPath: workspace.path) }
         guard shouldRun, case .stopped = state else { return }
         logger.info("Auto-starting local server (shouldRun=true from previous session)")
         start()
-    }
-
-    /// Proactively access protected directories so macOS surfaces TCC dialogs at a
-    /// predictable moment (app startup) rather than during unattended thane operation.
-    /// Safe to call repeatedly — once TCC is decided, subsequent calls are silent no-ops.
-    func probeFileAccess() {
-        let scope = fileAccessScope
-        let workspace = workspaceURL
-        Task.detached { [scope, workspace] in
-            let fm = FileManager.default
-            _ = try? fm.contentsOfDirectory(atPath: workspace.path)
-            guard scope != .workspaceOnly else { return }
-            let home = fm.homeDirectoryForCurrentUser
-            // Standard TCC-gated home subdirectories (Files and Folders permission).
-            // Music/Movies/Pictures are tied to app libraries and may prompt independently
-            // even when Full Disk Access is granted.
-            for name in ["Desktop", "Documents", "Downloads", "Music", "Movies", "Pictures"] {
-                _ = try? fm.contentsOfDirectory(atPath: home.appending(path: name).path)
-            }
-            // App container directories trigger the "data from other apps" TCC gate
-            // when the child thane process walks the home directory. Probe them here
-            // so the dialog surfaces at launch rather than during unattended operation.
-            let library = home.appending(path: "Library")
-            for name in ["Application Support", "Containers", "Group Containers"] {
-                _ = try? fm.contentsOfDirectory(atPath: library.appending(path: name).path)
-            }
-        }
     }
 
     func start() {

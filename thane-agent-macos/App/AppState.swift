@@ -10,6 +10,7 @@ final class AppState {
     let connection = ServerConnection()
     let platformRouter = PlatformServiceRouter()
     let binaryManager = BinaryManager()
+    let permissionsManager = PermissionsManager()
 
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "app")
 

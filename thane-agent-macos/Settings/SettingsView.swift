@@ -15,8 +15,11 @@ struct SettingsView: View {
             Tab("Local", systemImage: "desktopcomputer") {
                 LocalServerSettingsView()
             }
+            Tab("Permissions", systemImage: "lock.shield") {
+                PermissionsSettingsView()
+            }
         }
-        .frame(width: 480)
+        .frame(width: 520)
     }
 }
 
@@ -162,47 +165,6 @@ struct LocalServerSettingsView: View {
                 )
             }
 
-            Section {
-                Picker("Scope", selection: Binding(
-                    get: { manager.fileAccessScope },
-                    set: { manager.fileAccessScope = $0 }
-                )) {
-                    ForEach(FileAccessScope.allCases, id: \.self) { scope in
-                        Text(scope.label).tag(scope)
-                    }
-                }
-
-                if manager.fileAccessScope == .fullDisk {
-                    HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .foregroundStyle(.yellow)
-                        Text("Full Disk Access must be granted manually in System Settings.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Button("Open…") {
-                            NSWorkspace.shared.open(
-                                URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
-                            )
-                        }
-                        .font(.caption)
-                    }
-                }
-
-                HStack {
-                    Spacer()
-                    Button("Re-check Permissions") {
-                        manager.probeFileAccess()
-                    }
-                    .disabled(manager.binaryURL == nil)
-                }
-            } header: {
-                Text("File Access")
-            } footer: {
-                Text("Permissions are probed at launch so macOS shows any required dialogs upfront, before thane starts.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
             Section("Status") {
                 HStack {
                     statusLabel
@@ -296,6 +258,149 @@ struct LocalServerSettingsView: View {
             Text(hint)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+        }
+    }
+}
+
+// MARK: - Permissions Tab
+
+struct PermissionsSettingsView: View {
+    @Environment(AppState.self) private var appState
+
+    private var manager: PermissionsManager { appState.permissionsManager }
+
+    var body: some View {
+        Form {
+            // Full Disk Access — requires manual action in System Settings
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.yellow)
+                        Text("Full Disk Access")
+                            .font(.headline)
+                    }
+                    Text("Grants thane unrestricted read access to all files, including areas outside your home folder. Must be approved manually in System Settings — it cannot be requested via a dialog.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Spacer()
+                        Button("Open System Settings…") {
+                            NSWorkspace.shared.open(
+                                URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
+                            )
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            // Per-category rows
+            Section {
+                ForEach(manager.categories) { category in
+                    categoryRow(category)
+                }
+            } header: {
+                Text("File Locations")
+            } footer: {
+                Text("These locations are accessed by the thane process. Request access upfront to avoid unexpected permission dialogs during unattended server operation.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            // Custom locations
+            Section {
+                HStack {
+                    Spacer()
+                    Button("Add Location…") {
+                        let panel = NSOpenPanel()
+                        panel.canChooseFiles = false
+                        panel.canChooseDirectories = true
+                        panel.allowsMultipleSelection = false
+                        panel.message = "Choose a directory for thane to access"
+                        if panel.runModal() == .OK, let url = panel.url {
+                            manager.addCustomLocation(url)
+                        }
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .task { await manager.refreshPreviouslyRequested() }
+    }
+
+    @ViewBuilder
+    private func categoryRow(_ category: PermissionsManager.Category) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(category.name)
+                Text(category.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 6) {
+                statusBadge(category.status)
+                HStack(spacing: 6) {
+                    if category.isCustom {
+                        Button("Remove") {
+                            manager.removeCustomLocation(categoryID: category.id)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .foregroundStyle(.red)
+                    }
+                    actionButton(category)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func statusBadge(_ status: PermissionsManager.Status) -> some View {
+        switch status {
+        case .notRequested:
+            Text("Not Requested")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        case .granted:
+            Label("Granted", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .denied:
+            Label("Denied", systemImage: "xmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(_ category: PermissionsManager.Category) -> some View {
+        switch category.status {
+        case .notRequested:
+            Button("Request Access") {
+                Task { await manager.requestAccess(categoryID: category.id) }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        case .granted:
+            Button("Re-check") {
+                Task { await manager.requestAccess(categoryID: category.id) }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        case .denied:
+            Button("Open Settings…") {
+                NSWorkspace.shared.open(
+                    URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!
+                )
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
         }
     }
 }
