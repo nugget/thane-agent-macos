@@ -1,6 +1,7 @@
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
+import AppKit
 
 struct SettingsView: View {
     var body: some View {
@@ -120,9 +121,6 @@ struct ServerSettingsView: View {
 struct LocalServerSettingsView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.openWindow) private var openWindow
-    @State private var isPickingBinary = false
-    @State private var isPickingWorkspace = false
-    @State private var isPickingConfig = false
 
     private var manager: BinaryManager { appState.binaryManager }
 
@@ -134,8 +132,9 @@ struct LocalServerSettingsView: View {
                     url: manager.binaryURL,
                     placeholder: "Not found",
                     hint: "Search paths: \(BinaryManager.searchPaths.map(\.lastPathComponent).joined(separator: ", "))",
-                    isPicking: $isPickingBinary,
-                    contentTypes: [.unixExecutable],
+                    startingDirectory: manager.binaryURL?.deletingLastPathComponent(),
+                    canChooseFiles: true,
+                    canChooseDirectories: false,
                     onPick: { manager.binaryURL = $0 }
                 )
                 pathRow(
@@ -143,8 +142,9 @@ struct LocalServerSettingsView: View {
                     url: manager.workspaceURL,
                     placeholder: "~/Thane/",
                     hint: "Working directory — thane finds config.yaml here automatically",
-                    isPicking: $isPickingWorkspace,
-                    contentTypes: [.folder],
+                    startingDirectory: manager.workspaceURL,
+                    canChooseFiles: false,
+                    canChooseDirectories: true,
                     onPick: { manager.workspaceURL = $0 }
                 )
                 pathRow(
@@ -152,8 +152,9 @@ struct LocalServerSettingsView: View {
                     url: manager.configURL,
                     placeholder: "Auto (CWD + thane's discovery order)",
                     hint: "Override only if config.yaml isn't in the workspace",
-                    isPicking: $isPickingConfig,
-                    contentTypes: [.yaml, .data],
+                    startingDirectory: manager.configURL?.deletingLastPathComponent() ?? manager.workspaceURL,
+                    canChooseFiles: true,
+                    canChooseDirectories: false,
                     onPick: { manager.configURL = $0 }
                 )
             }
@@ -218,8 +219,9 @@ struct LocalServerSettingsView: View {
         url: URL?,
         placeholder: String,
         hint: String,
-        isPicking: Binding<Bool>,
-        contentTypes: [UTType],
+        startingDirectory: URL?,
+        canChooseFiles: Bool,
+        canChooseDirectories: Bool,
         onPick: @escaping (URL) -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -235,17 +237,16 @@ struct LocalServerSettingsView: View {
 
                 Spacer()
 
-                Button("Browse...") { isPicking.wrappedValue = true }
-                    .fileImporter(
-                        isPresented: isPicking,
-                        allowedContentTypes: contentTypes,
-                        onCompletion: { result in
-                            guard case .success(let picked) = result else { return }
-                            let accessed = picked.startAccessingSecurityScopedResource()
-                            defer { if accessed { picked.stopAccessingSecurityScopedResource() } }
-                            onPick(URL(fileURLWithPath: picked.path))
-                        }
-                    )
+                Button("Browse...") {
+                    let panel = NSOpenPanel()
+                    panel.canChooseFiles = canChooseFiles
+                    panel.canChooseDirectories = canChooseDirectories
+                    panel.allowsMultipleSelection = false
+                    panel.directoryURL = startingDirectory
+                    if panel.runModal() == .OK, let picked = panel.url {
+                        onPick(picked)
+                    }
+                }
             }
 
             Text(hint)
