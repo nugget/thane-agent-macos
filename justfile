@@ -1,12 +1,14 @@
+set dotenv-load
+
 app           := "thane-agent-macos"
-deploy-host   := "pocket.hollowoak.net"
-deploy-path   := "/Applications"
 build-dir     := "build"
 
-# Set via: export NOTARYTOOL_PROFILE=your-profile-name
+# Site-specific — set in .env (see .env.example)
+deploy-host    := env("DEPLOY_HOST")
+deploy-path    := env("DEPLOY_PATH", "/Applications")
 notary-profile := env("NOTARYTOOL_PROFILE", "notarytool")
 
-export DEVELOPER_DIR := "/Applications/Xcode.app/Contents/Developer"
+export DEVELOPER_DIR := env("DEVELOPER_DIR", "/Applications/Xcode.app/Contents/Developer")
 
 # List available recipes
 default:
