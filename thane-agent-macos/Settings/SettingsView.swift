@@ -1,10 +1,14 @@
 import SwiftUI
 import SwiftData
 import AppKit
+import ServiceManagement
 
 struct SettingsView: View {
     var body: some View {
         TabView {
+            Tab("General", systemImage: "gearshape") {
+                GeneralSettingsView()
+            }
             Tab("Remote", systemImage: "network") {
                 ServerSettingsView()
             }
@@ -252,5 +256,52 @@ struct LocalServerSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+// MARK: - General Tab
+
+struct GeneralSettingsView: View {
+    @State private var loginItemStatus = SMAppService.mainApp.status
+
+    private var launchAtLoginBinding: Binding<Bool> {
+        Binding(
+            get: { loginItemStatus == .enabled },
+            set: { enable in
+                do {
+                    if enable {
+                        try SMAppService.mainApp.register()
+                    } else {
+                        try SMAppService.mainApp.unregister()
+                    }
+                    loginItemStatus = SMAppService.mainApp.status
+                } catch {
+                    loginItemStatus = SMAppService.mainApp.status
+                }
+            }
+        )
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle("Launch at login", isOn: launchAtLoginBinding)
+                if loginItemStatus == .requiresApproval {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(.yellow)
+                        Text("Approval required in System Settings → General → Login Items.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Open…") {
+                            SMAppService.openSystemSettingsLoginItems()
+                        }
+                        .font(.caption)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .onAppear { loginItemStatus = SMAppService.mainApp.status }
     }
 }
