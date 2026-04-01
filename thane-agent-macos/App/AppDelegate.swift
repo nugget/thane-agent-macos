@@ -22,6 +22,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openConsole() {
-        NotificationCenter.default.post(name: .openConsoleWindow, object: nil)
+        appState?.openConsoleWindow?()
     }
 }

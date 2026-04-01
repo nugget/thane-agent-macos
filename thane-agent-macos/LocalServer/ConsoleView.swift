@@ -49,6 +49,8 @@ struct ConsoleView: View {
                 }
                 .padding(10)
             }
+            .defaultScrollAnchor(.bottom)
+            .scrollIndicators(.visible)
             .background(Color.black)
             .onChange(of: manager.logLines.count) {
                 if let last = manager.logLines.last {

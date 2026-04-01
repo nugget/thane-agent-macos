@@ -27,8 +27,9 @@ struct MainView: View {
             }
         }
         .frame(minWidth: 700, minHeight: 500)
-        .onReceive(NotificationCenter.default.publisher(for: .openConsoleWindow)) { _ in
-            openWindow(id: "console")
+        .onAppear {
+            // Register openWindow with AppState so AppKit contexts (dock menu, etc.) can use it.
+            appState.openConsoleWindow = { openWindow(id: "console") }
         }
     }
 
@@ -69,5 +70,4 @@ struct MainView: View {
 
 extension Notification.Name {
     static let newConversation = Notification.Name("newConversation")
-    static let openConsoleWindow = Notification.Name("openConsoleWindow")
 }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct MenuBarView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading) {
@@ -20,7 +21,7 @@ struct MenuBarView: View {
 
             if appState.binaryManager.state != .notConfigured {
                 Button("Open Console") {
-                    NotificationCenter.default.post(name: .openConsoleWindow, object: nil)
+                    openWindow(id: "console")
                 }
             }
 

@@ -51,6 +51,9 @@ final class AppState {
         return id
     }
 
+    /// Called by MainView on appear to bridge SwiftUI's openWindow action to AppKit contexts.
+    var openConsoleWindow: (() -> Void)?
+
     init() {
         connection.onPlatformRequest = { [weak self] request in
             guard let self else {
@@ -77,6 +80,8 @@ final class AppState {
                 break
             }
         }
+
+        binaryManager.autoStartIfNeeded()
     }
 
     /// Connect to a remote server using the given config and stored token.

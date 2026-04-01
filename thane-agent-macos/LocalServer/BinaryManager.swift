@@ -100,8 +100,16 @@ final class BinaryManager {
     private var process: Process?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
+    private var restartTask: Task<Void, Never>?
+    private var restartAttempt = 0
     private let maxLogLines = 500
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "binary")
+
+    /// Whether the server should be running. Persisted across launches.
+    private var shouldRun: Bool {
+        get { UserDefaults.standard.bool(forKey: "localServerShouldRun") }
+        set { UserDefaults.standard.set(newValue, forKey: "localServerShouldRun") }
+    }
 
     // MARK: - Discovery
 
@@ -142,11 +150,21 @@ final class BinaryManager {
 
     // MARK: - Lifecycle
 
+    /// Called by AppState after registering onStateChange, so the callback is ready before any auto-start.
+    func autoStartIfNeeded() {
+        guard shouldRun, case .stopped = state else { return }
+        logger.info("Auto-starting local server (shouldRun=true from previous session)")
+        start()
+    }
+
     func start() {
+        restartTask?.cancel()
+        restartTask = nil
         guard let url = binaryURL,
               FileManager.default.fileExists(atPath: url.path),
               !state.isRunning else { return }
 
+        shouldRun = true
         state = .starting
         logLines.removeAll()
         detectedVersion = nil
@@ -188,6 +206,7 @@ final class BinaryManager {
             try proc.run()
             process = proc
             startedAt = Date()
+            restartAttempt = 0
             state = .running(pid: proc.processIdentifier)
             append("thane started (pid \(proc.processIdentifier))", isError: false)
             logger.info("thane started, pid \(proc.processIdentifier)")
@@ -199,6 +218,9 @@ final class BinaryManager {
     }
 
     func stop() {
+        shouldRun = false
+        restartTask?.cancel()
+        restartTask = nil
         guard state.isRunning else { return }
         process?.terminate()
         // State update happens in terminationHandler.
@@ -232,13 +254,33 @@ final class BinaryManager {
         process = nil
         startedAt = nil
 
-        if code == 0 || code == SIGTERM {
+        let clean = (code == 0 || code == SIGTERM)
+        if clean {
             state = .stopped
             append("thane stopped", isError: false)
         } else {
             state = .crashed(code: code)
             append("thane exited with code \(code)", isError: true)
             logger.error("thane crashed, exit code \(code)")
+        }
+
+        if !clean && shouldRun {
+            scheduleRestart()
+        }
+    }
+
+    private func scheduleRestart() {
+        restartAttempt += 1
+        // Exponential backoff: 2, 4, 8, 16, 32, 60 seconds (capped).
+        let delay = min(Double(1 << min(restartAttempt, 6)), 60.0)
+        append("Restarting in \(Int(delay))s (attempt \(restartAttempt))…", isError: false)
+        logger.info("Scheduling restart in \(delay)s (attempt \(self.restartAttempt))")
+
+        restartTask = Task { [weak self] in
+            guard let self else { return }
+            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+            guard shouldRun else { return }
+            start()
         }
     }
 
