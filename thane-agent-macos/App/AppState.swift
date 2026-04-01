@@ -54,6 +54,19 @@ final class AppState {
 
     /// Called by MainView on appear to bridge SwiftUI's openWindow action to AppKit contexts.
     var openConsoleWindow: (() -> Void)?
+    var openDashboardWindow: (() -> Void)?
+
+    /// Base URL of the currently active server — local takes priority over remote.
+    /// Used by the dashboard window to load the web UI.
+    var dashboardURL: URL? {
+        if binaryManager.state.isRunning {
+            return URL(string: "http://localhost:\(binaryManager.localConfig.nativePort)")
+        }
+        return activeServerURL
+    }
+
+    /// Stored when a connection is established so dashboard can open the right URL.
+    private(set) var activeServerURL: URL?
 
     init() {
         connection.onPlatformRequest = { [weak self] request in
@@ -88,6 +101,7 @@ final class AppState {
     /// Connect to a remote server using the given config and stored token.
     func connect(config: ServerConfig) {
         isLocallyConnected = false
+        activeServerURL = config.url
         guard let url = config.url else {
             logger.error("Invalid URL in server config: \(config.urlString)")
             return
@@ -112,6 +126,7 @@ final class AppState {
 
     func disconnect() {
         isLocallyConnected = false
+        activeServerURL = nil
         connection.disconnect()
     }
 
@@ -126,6 +141,7 @@ final class AppState {
         guard let url = URL(string: "http://localhost:\(config.nativePort)") else { return }
         let clientName = Host.current().localizedName ?? "Mac"
         isLocallyConnected = true
+        activeServerURL = url
         connection.connect(url: url, token: token, clientID: localClientID, clientName: clientName, persist: true)
     }
 

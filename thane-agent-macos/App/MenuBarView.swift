@@ -19,6 +19,12 @@ struct MenuBarView: View {
 
             Divider()
 
+            if appState.dashboardURL != nil {
+                Button("Open Dashboard") {
+                    openWindow(id: "dashboard")
+                }
+            }
+
             if appState.binaryManager.state != .notConfigured {
                 Button("Open Console") {
                     openWindow(id: "console")

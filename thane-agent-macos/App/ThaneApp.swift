@@ -43,5 +43,12 @@ struct ThaneApp: App {
         }
         .defaultSize(width: 660, height: 420)
         .windowResizability(.contentMinSize)
+
+        Window("Dashboard", id: "dashboard") {
+            DashboardView()
+                .environment(appState)
+        }
+        .defaultSize(width: 1024, height: 768)
+        .windowResizability(.contentMinSize)
     }
 }

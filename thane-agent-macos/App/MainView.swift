@@ -30,6 +30,7 @@ struct MainView: View {
         .onAppear {
             // Register openWindow with AppState so AppKit contexts (dock menu, etc.) can use it.
             appState.openConsoleWindow = { openWindow(id: "console") }
+            appState.openDashboardWindow = { openWindow(id: "dashboard") }
         }
     }
 
