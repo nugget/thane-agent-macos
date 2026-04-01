@@ -1,1 +1,5 @@
 .DS_Store
+
+# Xcode per-user state — never shared
+*.xcuserstate
+xcuserdata/
