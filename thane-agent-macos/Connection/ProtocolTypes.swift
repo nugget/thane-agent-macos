@@ -48,7 +48,7 @@ struct AuthOKMessage: Codable {
 }
 
 struct AuthInvalidMessage: Codable {
-    let type: String // "auth_invalid"
+    let type: String // "auth_failed"
     let message: String
 }
 

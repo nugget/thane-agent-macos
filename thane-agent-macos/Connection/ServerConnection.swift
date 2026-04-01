@@ -131,9 +131,9 @@ final class ServerConnection: @unchecked Sendable {
             )
             try await sendJSON(authMsg)
 
-            // Step 3: Receive auth_ok or auth_invalid
+            // Step 3: Receive auth_ok or auth_failed
             let authResp = try await receiveMessage()
-            if authResp.type == "auth_invalid" {
+            if authResp.type == "auth_failed" {
                 let invalid = try JSONDecoder().decode(AuthInvalidMessage.self, from: encodeToData(authResp))
                 throw ConnectionError.authFailed(invalid.message)
             }
