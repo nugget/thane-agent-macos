@@ -3,12 +3,13 @@ import SwiftData
 import os
 
 /// Central application state coordinator.
-/// Owns the server connection and platform service router.
+/// Owns the server connection, platform service router, and local binary manager.
 @Observable
 @MainActor
 final class AppState {
     let connection = ServerConnection()
     let platformRouter = PlatformServiceRouter()
+    let binaryManager = BinaryManager()
 
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "app")
 
