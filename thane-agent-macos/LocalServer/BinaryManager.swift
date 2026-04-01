@@ -54,6 +54,7 @@ final class BinaryManager {
     private(set) var state: State = .notConfigured
     private(set) var logLines: [LogLine] = []
     private(set) var startedAt: Date?
+    private(set) var detectedVersion: String?
 
     /// URL of the thane binary. Set by the user or discovered automatically.
     var binaryURL: URL? {
@@ -131,6 +132,7 @@ final class BinaryManager {
 
         state = .starting
         logLines.removeAll()
+        detectedVersion = nil
 
         let proc = Process()
         proc.executableURL = url
@@ -223,15 +225,29 @@ final class BinaryManager {
     }
 
     private func append(_ text: String, isError: Bool) {
-        let new = text
+        let lines = text
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-            .map { LogLine(timestamp: Date(), text: $0, isError: isError) }
+        for line in lines {
+            if detectedVersion == nil, let version = extractVersion(from: line) {
+                detectedVersion = version
+            }
+        }
+        let new = lines.map { LogLine(timestamp: Date(), text: $0, isError: isError) }
         logLines.append(contentsOf: new)
         if logLines.count > maxLogLines {
             logLines.removeFirst(logLines.count - maxLogLines)
         }
+    }
+
+    private func extractVersion(from line: String) -> String? {
+        guard line.hasPrefix("{"),
+              let data = line.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = obj["thane_version"] as? String
+        else { return nil }
+        return version
     }
 
     private func refreshState() {

@@ -98,8 +98,18 @@ private struct ConsoleHeaderView: View {
             // Binary info
             if let url = manager.binaryURL {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text(url.lastPathComponent)
-                        .font(.subheadline.weight(.medium))
+                    HStack(spacing: 6) {
+                        Text(url.lastPathComponent)
+                            .font(.subheadline.weight(.medium))
+                        if let version = manager.detectedVersion {
+                            Text(version)
+                                .font(.caption.weight(.medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1)
+                                .background(.quaternary, in: RoundedRectangle(cornerRadius: 4))
+                        }
+                    }
                     Text(url.deletingLastPathComponent().path)
                         .font(.caption)
                         .foregroundStyle(.secondary)
