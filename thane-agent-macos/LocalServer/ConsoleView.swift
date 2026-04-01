@@ -5,6 +5,38 @@ struct ConsoleView: View {
 
     private var manager: BinaryManager { appState.binaryManager }
 
+    @State private var minLevel: LogLevel = .all
+
+    enum LogLevel: String, CaseIterable {
+        case all   = "All"
+        case info  = "Info"
+        case warn  = "Warn"
+        case error = "Error"
+
+        private static let order: [String: Int] = ["DEBUG": 0, "INFO": 1, "WARN": 2, "ERROR": 3]
+
+        func passes(_ line: BinaryManager.LogLine) -> Bool {
+            guard self != .all else { return true }
+            guard let level = line.level else { return true }  // always show internal app lines
+            let lineVal = Self.order[level] ?? 0
+            let minVal  = Self.order[levelString] ?? 0
+            return lineVal >= minVal
+        }
+
+        private var levelString: String {
+            switch self {
+            case .all:   "DEBUG"
+            case .info:  "INFO"
+            case .warn:  "WARN"
+            case .error: "ERROR"
+            }
+        }
+    }
+
+    private var filteredLines: [BinaryManager.LogLine] {
+        manager.logLines.filter { minLevel.passes($0) }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             ConsoleHeaderView(manager: manager)
@@ -14,6 +46,15 @@ struct ConsoleView: View {
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 controlButtons
+                Divider()
+                Picker("Level", selection: $minLevel) {
+                    ForEach(LogLevel.allCases, id: \.self) { level in
+                        Text(level.rawValue).tag(level)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 180)
+                .help("Minimum log level to display")
                 Divider()
                 Button {
                     manager.clearLog()
@@ -30,19 +71,17 @@ struct ConsoleView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(manager.logLines) { line in
+                    ForEach(filteredLines) { line in
                         Text(line.text)
                             .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(line.isError
-                                ? Color(red: 1, green: 0.4, blue: 0.3)
-                                : Color(red: 0.2, green: 0.9, blue: 0.2))
+                            .foregroundStyle(lineColor(line))
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .id(line.id)
                     }
 
-                    if manager.logLines.isEmpty {
-                        Text("No output yet.")
+                    if filteredLines.isEmpty {
+                        Text(manager.logLines.isEmpty ? "No output yet." : "No lines match the current filter.")
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
@@ -52,14 +91,20 @@ struct ConsoleView: View {
             .defaultScrollAnchor(.bottom)
             .scrollIndicators(.visible)
             .background(Color.black)
-            .onChange(of: manager.logLines.count) {
-                if let last = manager.logLines.last {
+            .onChange(of: filteredLines.count) {
+                if let last = filteredLines.last {
                     withAnimation(nil) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
             }
         }
+    }
+
+    private func lineColor(_ line: BinaryManager.LogLine) -> Color {
+        if line.isError || line.level == "ERROR" { return Color(red: 1,   green: 0.4, blue: 0.3) }
+        if line.level == "WARN"                  { return Color(red: 1,   green: 0.8, blue: 0.2) }
+        return Color(red: 0.2, green: 0.9, blue: 0.2)
     }
 
     @ViewBuilder

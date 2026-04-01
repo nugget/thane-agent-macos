@@ -58,6 +58,9 @@ final class BinaryManager {
         let timestamp: Date
         let text: String
         let isError: Bool
+        /// Structured log level parsed from JSON output (DEBUG/INFO/WARN/ERROR).
+        /// Nil for non-JSON lines (internal app messages).
+        let level: String?
     }
 
     // MARK: - Properties
@@ -294,25 +297,28 @@ final class BinaryManager {
             .components(separatedBy: .newlines)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-        for line in lines {
-            if detectedVersion == nil, let version = extractVersion(from: line) {
-                detectedVersion = version
-            }
+        let new: [LogLine] = lines.map { line in
+            let parsed = parseJSONLine(line)
+            if detectedVersion == nil, let v = parsed?.version { detectedVersion = v }
+            return LogLine(timestamp: Date(), text: line, isError: isError, level: parsed?.level)
         }
-        let new = lines.map { LogLine(timestamp: Date(), text: $0, isError: isError) }
         logLines.append(contentsOf: new)
         if logLines.count > maxLogLines {
             logLines.removeFirst(logLines.count - maxLogLines)
         }
     }
 
-    private func extractVersion(from line: String) -> String? {
+    private struct ParsedLine { let version: String?; let level: String? }
+
+    private func parseJSONLine(_ line: String) -> ParsedLine? {
         guard line.hasPrefix("{"),
               let data = line.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let version = obj["thane_version"] as? String
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { return nil }
-        return version
+        return ParsedLine(
+            version: obj["thane_version"] as? String,
+            level: (obj["level"] as? String)?.uppercased()
+        )
     }
 
     private func refreshState() {
