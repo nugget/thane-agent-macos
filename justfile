@@ -6,6 +6,8 @@ build-dir     := "build"
 # Set via: export NOTARYTOOL_PROFILE=your-profile-name
 notary-profile := env("NOTARYTOOL_PROFILE", "notarytool")
 
+export DEVELOPER_DIR := "/Applications/Xcode.app/Contents/Developer"
+
 # List available recipes
 default:
     @just --list

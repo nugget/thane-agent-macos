@@ -1,4 +1,5 @@
 .DS_Store
+build/
 
 # Xcode per-user state — never shared
 *.xcuserstate
