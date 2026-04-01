@@ -93,7 +93,7 @@ final class BinaryManager {
             binaryURL = URL(fileURLWithPath: path)
         } else {
             binaryURL = Self.searchPaths.first {
-                FileManager.default.isExecutableFile(atPath: $0.path)
+                FileManager.default.fileExists(atPath: $0.path)
             }
         }
         refreshState()
@@ -103,7 +103,7 @@ final class BinaryManager {
 
     func start() {
         guard let url = binaryURL,
-              FileManager.default.isExecutableFile(atPath: url.path),
+              FileManager.default.fileExists(atPath: url.path),
               !state.isRunning else { return }
 
         state = .starting
@@ -202,7 +202,7 @@ final class BinaryManager {
 
     private func refreshState() {
         guard !state.isRunning else { return }
-        if let url = binaryURL, FileManager.default.isExecutableFile(atPath: url.path) {
+        if let url = binaryURL, FileManager.default.fileExists(atPath: url.path) {
             state = .stopped
         } else {
             state = .notConfigured

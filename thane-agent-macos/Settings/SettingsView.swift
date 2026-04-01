@@ -211,12 +211,12 @@ struct LocalServerSettingsView: View {
     }
 
     private func handleFilePick(_ result: Result<URL, Error>) {
-        switch result {
-        case .success(let url):
-            manager.binaryURL = url
-        case .failure(let error):
-            // Non-fatal — user cancelled or picker failed
-            _ = error
-        }
+        guard case .success(let url) = result else { return }
+        // fileImporter returns a security-scoped URL. Resolve it to a plain
+        // path so BinaryManager can launch it via Process without needing to
+        // manage scope lifetimes across sessions.
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
+        manager.binaryURL = URL(fileURLWithPath: url.path)
     }
 }
