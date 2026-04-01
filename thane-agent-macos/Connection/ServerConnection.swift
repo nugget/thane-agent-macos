@@ -4,8 +4,8 @@ import os
 /// Manages the WebSocket connection to a thane-ai-agent server.
 /// Handles auth handshake, capability registration, message routing,
 /// and reconnection with exponential backoff.
-@Observable
-final class ServerConnection: @unchecked Sendable {
+@Observable @MainActor
+final class ServerConnection {
     enum State: Equatable {
         case disconnected
         case connecting
@@ -24,7 +24,6 @@ final class ServerConnection: @unchecked Sendable {
     private var session: URLSession?
     private var nextID: Int64 = 1
     private var pendingResponses: [Int64: CheckedContinuation<WSMessage, Error>] = [:]
-    private let pendingLock = NSLock()
     private var reconnectTask: Task<Void, Never>?
     private var readLoopTask: Task<Void, Never>?
     private var intentionalDisconnect = false
@@ -87,7 +86,6 @@ final class ServerConnection: @unchecked Sendable {
     // MARK: - Private
 
     private var streamHandlers: [Int64: (ChatStreamData) -> Void] = [:]
-    private let streamLock = NSLock()
 
     private func nextMessageID() -> Int64 {
         let id = nextID
@@ -222,12 +220,10 @@ final class ServerConnection: @unchecked Sendable {
             case "chat_stream":
                 let data = try encodeToData(message)
                 let stream = try JSONDecoder().decode(ChatStreamMessage.self, from: data)
-                streamLock.lock()
                 let handler = streamHandlers[stream.id]
                 if stream.data.kind == "done" {
                     streamHandlers.removeValue(forKey: stream.id)
                 }
-                streamLock.unlock()
                 handler?(stream.data)
 
             default:
@@ -268,39 +264,28 @@ final class ServerConnection: @unchecked Sendable {
 
     private func waitForResponse(id: Int64, timeout: TimeInterval) async throws -> WSMessage {
         try await withCheckedThrowingContinuation { continuation in
-            pendingLock.lock()
             pendingResponses[id] = continuation
-            pendingLock.unlock()
 
             Task {
                 try await Task.sleep(for: .seconds(timeout))
-                pendingLock.lock()
                 let cont = pendingResponses.removeValue(forKey: id)
-                pendingLock.unlock()
                 cont?.resume(throwing: ConnectionError.timeout)
             }
         }
     }
 
     private func deliverResponse(id: Int64, message: WSMessage) {
-        pendingLock.lock()
         let continuation = pendingResponses.removeValue(forKey: id)
-        pendingLock.unlock()
         continuation?.resume(returning: message)
     }
 
     private func cancelAllPending(error: Error) {
-        pendingLock.lock()
         let pending = pendingResponses
         pendingResponses.removeAll()
-        pendingLock.unlock()
+        streamHandlers.removeAll()
         for (_, continuation) in pending {
             continuation.resume(throwing: error)
         }
-
-        streamLock.lock()
-        streamHandlers.removeAll()
-        streamLock.unlock()
     }
 
     // MARK: - Reconnection
