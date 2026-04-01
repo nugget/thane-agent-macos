@@ -5,12 +5,22 @@ import SwiftData
 struct ThaneApp: App {
     @State private var appState = AppState()
 
+    private static let modelContainer: ModelContainer = {
+        let schema = Schema([ServerConfig.self, Conversation.self, ChatMessage.self])
+        let config = ModelConfiguration(schema: schema)
+        do {
+            return try ModelContainer(for: schema, configurations: config)
+        } catch {
+            fatalError("Failed to create model container: \(error)")
+        }
+    }()
+
     var body: some Scene {
         WindowGroup {
             MainView()
                 .environment(appState)
         }
-        .modelContainer(for: ServerConfig.self)
+        .modelContainer(Self.modelContainer)
 
         MenuBarExtra {
             MenuBarView()
@@ -22,7 +32,7 @@ struct ThaneApp: App {
         Settings {
             SettingsView()
                 .environment(appState)
-                .modelContainer(for: ServerConfig.self)
+                .modelContainer(Self.modelContainer)
         }
     }
 }
