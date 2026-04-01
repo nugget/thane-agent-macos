@@ -195,8 +195,16 @@ final class BinaryManager {
             _ = try? fm.contentsOfDirectory(atPath: workspace.path)
             guard scope != .workspaceOnly else { return }
             let home = fm.homeDirectoryForCurrentUser
+            // Standard TCC-gated home subdirectories (Files and Folders permission).
             for name in ["Desktop", "Documents", "Downloads"] {
                 _ = try? fm.contentsOfDirectory(atPath: home.appending(path: name).path)
+            }
+            // App container directories trigger the "data from other apps" TCC gate
+            // when the child thane process walks the home directory. Probe them here
+            // so the dialog surfaces at launch rather than during unattended operation.
+            let library = home.appending(path: "Library")
+            for name in ["Application Support", "Containers", "Group Containers"] {
+                _ = try? fm.contentsOfDirectory(atPath: library.appending(path: name).path)
             }
         }
     }
