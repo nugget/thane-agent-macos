@@ -43,7 +43,9 @@ struct OllamaClient {
                     var request = URLRequest(url: url)
                     request.httpMethod = "POST"
                     request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    request.timeoutInterval = 120
+                    // Local models can be slow to produce the first token.
+                    // The user can always cancel; don't race them with a short timeout.
+                    request.timeoutInterval = 300
 
                     let body = OllamaRequest(model: model, messages: messages, stream: true)
                     request.httpBody = try JSONEncoder().encode(body)
