@@ -25,23 +25,11 @@ final class ServerConfig {
         URL(string: urlString)
     }
 
-    /// Ollama-compatible API — port 11434, used for chat.
-    var ollamaURL: URL? {
-        derivedURL(port: 11434)
-    }
+    /// URL used for Ollama-compatible chat API.
+    /// Uses the base URL as-is — port routing is handled by the reverse proxy.
+    var ollamaURL: URL? { url }
 
-    /// Thane API — port 8080, used for platform WebSocket and REST.
-    var apiURL: URL? {
-        derivedURL(port: 8080)
-    }
-
-    private func derivedURL(port: Int) -> URL? {
-        guard let url, var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return nil
-        }
-        components.port = port
-        // Strip any path — base URL only
-        components.path = ""
-        return components.url
-    }
+    /// URL used for the platform WebSocket and native REST API.
+    /// Uses the base URL as-is — port routing is handled by the reverse proxy.
+    var apiURL: URL? { url }
 }

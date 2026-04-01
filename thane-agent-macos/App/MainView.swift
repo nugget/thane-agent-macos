@@ -10,7 +10,8 @@ struct MainView: View {
     private var ollamaURL: URL? {
         if let remote = defaultConfigs.first?.ollamaURL { return remote }
         if appState.binaryManager.state.isRunning {
-            return URL(string: "http://localhost:11434")
+            let port = appState.binaryManager.localConfig.ollamaPort
+            return URL(string: "http://localhost:\(port)")
         }
         return nil
     }

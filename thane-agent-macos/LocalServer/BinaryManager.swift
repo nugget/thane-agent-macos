@@ -11,6 +11,17 @@ import os
 ///
 /// Future: download/update from GitHub release assets, auto-restart on crash,
 /// SMAppService for Login Item integration.
+/// Subset of thane's config.yaml relevant to the macOS app.
+/// Parsed on a best-effort basis — always falls back to defaults.
+struct LocalThaneConfig {
+    var nativePort: Int = 8080
+    var ollamaPort: Int = 11434
+    var platformEnabled: Bool = false
+    var platformToken: String? = nil
+
+    static let defaults = LocalThaneConfig()
+}
+
 @Observable
 @MainActor
 final class BinaryManager {
@@ -51,10 +62,16 @@ final class BinaryManager {
 
     // MARK: - Properties
 
-    private(set) var state: State = .notConfigured
+    private(set) var state: State = .notConfigured {
+        didSet { onStateChange?(state) }
+    }
     private(set) var logLines: [LogLine] = []
     private(set) var startedAt: Date?
     private(set) var detectedVersion: String?
+    private(set) var localConfig: LocalThaneConfig = .defaults
+
+    /// Called whenever state changes. AppState uses this to auto-connect the WebSocket.
+    var onStateChange: ((State) -> Void)?
 
     /// URL of the thane binary. Set by the user or discovered automatically.
     var binaryURL: URL? {
@@ -133,6 +150,7 @@ final class BinaryManager {
         state = .starting
         logLines.removeAll()
         detectedVersion = nil
+        localConfig = Self.parseConfig(at: configURL ?? workspaceURL.appending(path: "config.yaml"))
 
         let proc = Process()
         proc.executableURL = url
@@ -257,5 +275,69 @@ final class BinaryManager {
         } else {
             state = .notConfigured
         }
+    }
+
+    // MARK: - Config Parsing
+
+    /// Parse the subset of thane's config.yaml that the macOS app needs.
+    /// Uses a simple line-based approach — no YAML library required.
+    static func parseConfig(at url: URL) -> LocalThaneConfig {
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
+            return .defaults
+        }
+        var result = LocalThaneConfig()
+        var topSection = ""
+        var inTokensList = false
+
+        for line in content.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.hasPrefix("#"), !trimmed.isEmpty else { continue }
+            let indent = line.prefix(while: { $0 == " " }).count
+
+            // Top-level section key
+            if indent == 0 && trimmed.hasSuffix(":") && !trimmed.contains(" ") {
+                topSection = String(trimmed.dropLast())
+                inTokensList = false
+                continue
+            }
+
+            switch topSection {
+            case "listen":
+                if let p = parseYAMLPort(trimmed) { result.nativePort = p }
+
+            case "ollama_api":
+                if let p = parseYAMLPort(trimmed) { result.ollamaPort = p }
+
+            case "platform":
+                if trimmed == "enabled: true"  { result.platformEnabled = true }
+                if trimmed == "enabled: false" { result.platformEnabled = false }
+                if trimmed == "tokens:" {
+                    inTokensList = true
+                } else if inTokensList && trimmed.hasPrefix("- ") {
+                    if result.platformToken == nil {
+                        result.platformToken = extractYAMLListValue(trimmed)
+                    }
+                } else if inTokensList && !trimmed.hasPrefix("- ") {
+                    inTokensList = false
+                }
+
+            default: break
+            }
+        }
+        return result
+    }
+
+    private static func parseYAMLPort(_ trimmed: String) -> Int? {
+        guard trimmed.hasPrefix("port:") else { return nil }
+        return Int(trimmed.dropFirst("port:".count).trimmingCharacters(in: .whitespaces))
+    }
+
+    private static func extractYAMLListValue(_ trimmed: String) -> String? {
+        var value = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
+           (value.hasPrefix("'")  && value.hasSuffix("'")) {
+            value = String(value.dropFirst().dropLast())
+        }
+        return value.isEmpty ? nil : value
     }
 }

@@ -39,6 +39,18 @@ final class AppState {
         }
     }
 
+    /// True when the current WebSocket connection is to the local binary.
+    /// Prevents stopping a remote connection when the local binary stops.
+    private var isLocallyConnected = false
+
+    /// Stable client ID for local connections, generated once and persisted.
+    private var localClientID: String {
+        if let id = UserDefaults.standard.string(forKey: "localClientID") { return id }
+        let id = UUID().uuidString
+        UserDefaults.standard.set(id, forKey: "localClientID")
+        return id
+    }
+
     init() {
         connection.onPlatformRequest = { [weak self] request in
             guard let self else {
@@ -52,10 +64,24 @@ final class AppState {
             }
             return await platformRouter.handle(request: request)
         }
+
+        binaryManager.onStateChange = { [weak self] state in
+            guard let self else { return }
+            switch state {
+            case .running:
+                // Only auto-connect locally if not already connected to a remote server
+                if !self.isConnected { self.connectLocal() }
+            case .stopped, .crashed, .notConfigured:
+                if self.isLocallyConnected { self.disconnect() }
+            default:
+                break
+            }
+        }
     }
 
-    /// Connect to a server using the given config and stored token.
+    /// Connect to a remote server using the given config and stored token.
     func connect(config: ServerConfig) {
+        isLocallyConnected = false
         guard let url = config.url else {
             logger.error("Invalid URL in server config: \(config.urlString)")
             return
@@ -79,7 +105,22 @@ final class AppState {
     }
 
     func disconnect() {
+        isLocallyConnected = false
         connection.disconnect()
+    }
+
+    /// Connect the platform WebSocket to the locally running binary.
+    /// Reads ports and token from the parsed config — no-ops if platform isn't configured.
+    func connectLocal() {
+        let config = binaryManager.localConfig
+        guard config.platformEnabled, let token = config.platformToken else {
+            logger.info("Local binary running but platform not configured in config — WebSocket skipped")
+            return
+        }
+        guard let url = URL(string: "http://localhost:\(config.nativePort)") else { return }
+        let clientName = Host.current().localizedName ?? "Mac"
+        isLocallyConnected = true
+        connection.connect(url: url, token: token, clientID: localClientID, clientName: clientName, persist: true)
     }
 
     /// Save a token for a server config to the Keychain.
