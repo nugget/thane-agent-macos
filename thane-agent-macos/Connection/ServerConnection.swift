@@ -16,6 +16,7 @@ final class ServerConnection: @unchecked Sendable {
 
     private(set) var state: State = .disconnected
     private(set) var providerID: String?
+    private(set) var account: String?
     private(set) var serverVersion: String?
     private(set) var lastError: String?
 
@@ -57,6 +58,7 @@ final class ServerConnection: @unchecked Sendable {
         Task { @MainActor in
             state = .disconnected
             providerID = nil
+            account = nil
         }
     }
 
@@ -141,7 +143,10 @@ final class ServerConnection: @unchecked Sendable {
                 throw ConnectionError.unexpectedMessage("Expected auth_ok, got \(authResp.type)")
             }
             if let authOK = try? JSONDecoder().decode(AuthOKMessage.self, from: encodeToData(authResp)) {
-                Task { @MainActor in providerID = authOK.providerID }
+                Task { @MainActor in
+                    providerID = authOK.providerID
+                    account = authOK.account
+                }
             }
 
             // Step 4: Register capabilities

@@ -40,9 +40,10 @@ struct AuthMessage: Codable {
 struct AuthOKMessage: Codable {
     let type: String // "auth_ok"
     let providerID: String
+    let account: String
 
     enum CodingKeys: String, CodingKey {
-        case type
+        case type, account
         case providerID = "provider_id"
     }
 }
