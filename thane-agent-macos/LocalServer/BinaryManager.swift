@@ -196,7 +196,9 @@ final class BinaryManager {
             guard scope != .workspaceOnly else { return }
             let home = fm.homeDirectoryForCurrentUser
             // Standard TCC-gated home subdirectories (Files and Folders permission).
-            for name in ["Desktop", "Documents", "Downloads"] {
+            // Music/Movies/Pictures are tied to app libraries and may prompt independently
+            // even when Full Disk Access is granted.
+            for name in ["Desktop", "Documents", "Downloads", "Music", "Movies", "Pictures"] {
                 _ = try? fm.contentsOfDirectory(atPath: home.appending(path: name).path)
             }
             // App container directories trigger the "data from other apps" TCC gate
