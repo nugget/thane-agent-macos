@@ -182,6 +182,10 @@ final class BinaryManager {
         // State update happens in terminationHandler.
     }
 
+    func clearLog() {
+        logLines.removeAll()
+    }
+
     func restart() {
         if state.isRunning {
             // terminationHandler will not auto-restart; we trigger manually after stop.

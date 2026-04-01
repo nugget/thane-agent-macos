@@ -119,6 +119,7 @@ struct ServerSettingsView: View {
 
 struct LocalServerSettingsView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.openWindow) private var openWindow
     @State private var isPickingBinary = false
     @State private var isPickingWorkspace = false
     @State private var isPickingConfig = false
@@ -160,17 +161,16 @@ struct LocalServerSettingsView: View {
             Section("Status") {
                 HStack {
                     statusLabel
-
                     Spacer()
-
                     controlButtons
                 }
-            }
 
-            if !manager.logLines.isEmpty {
-                Section("Output") {
-                    BinaryLogView(logLines: manager.logLines)
-                        .frame(minHeight: 120, maxHeight: 240)
+                HStack {
+                    Spacer()
+                    Button("Open Console") {
+                        openWindow(id: "console")
+                    }
+                    .disabled(manager.logLines.isEmpty && !manager.state.isRunning)
                 }
             }
         }

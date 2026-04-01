@@ -34,5 +34,12 @@ struct ThaneApp: App {
                 .environment(appState)
                 .modelContainer(Self.modelContainer)
         }
+
+        Window("Console", id: "console") {
+            ConsoleView()
+                .environment(appState)
+        }
+        .defaultSize(width: 660, height: 420)
+        .windowResizability(.contentMinSize)
     }
 }
