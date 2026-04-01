@@ -94,7 +94,17 @@ final class ServerConnection {
     }
 
     private func performConnect(url: URL, token: String, clientID: String, clientName: String) {
-        let wsURL = url.appendingPathComponent("v1/platform/ws")
+        // Build the WebSocket URL. Using wss:// (instead of https://) forces HTTP/1.1
+        // upgrade (RFC 6455) rather than HTTP/2 extended CONNECT (RFC 8441), which is
+        // required for compatibility with Traefik and most reverse proxies.
+        let rawURL = url.appendingPathComponent("v1/platform/ws")
+        var components = URLComponents(url: rawURL, resolvingAgainstBaseURL: false) ?? URLComponents()
+        switch components.scheme {
+        case "https": components.scheme = "wss"
+        case "http":  components.scheme = "ws"
+        default: break
+        }
+        let wsURL = components.url ?? rawURL
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
         session = URLSession(configuration: config)
