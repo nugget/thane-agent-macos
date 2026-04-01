@@ -53,6 +53,7 @@ final class BinaryManager {
 
     private(set) var state: State = .notConfigured
     private(set) var logLines: [LogLine] = []
+    private(set) var startedAt: Date?
 
     /// URL of the thane binary. Set by the user or discovered automatically.
     var binaryURL: URL? {
@@ -166,6 +167,7 @@ final class BinaryManager {
         do {
             try proc.run()
             process = proc
+            startedAt = Date()
             state = .running(pid: proc.processIdentifier)
             append("thane started (pid \(proc.processIdentifier))", isError: false)
             logger.info("thane started, pid \(proc.processIdentifier)")
@@ -208,6 +210,7 @@ final class BinaryManager {
         stdoutPipe = nil
         stderrPipe = nil
         process = nil
+        startedAt = nil
 
         if code == 0 || code == SIGTERM {
             state = .stopped

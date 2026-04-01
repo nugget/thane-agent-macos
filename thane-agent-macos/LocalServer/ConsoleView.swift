@@ -3,23 +3,45 @@ import SwiftUI
 struct ConsoleView: View {
     @Environment(AppState.self) private var appState
 
-    // Approximate width for 80 monospaced chars at 12pt (~7.2pt/char + padding)
-    private let consoleWidth: CGFloat = 606
+    private var manager: BinaryManager { appState.binaryManager }
 
     var body: some View {
+        VStack(spacing: 0) {
+            ConsoleHeaderView(manager: manager)
+            Divider()
+            logView
+        }
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                controlButtons
+                Divider()
+                Button {
+                    manager.clearLog()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .help("Clear console")
+                .disabled(manager.logLines.isEmpty)
+            }
+        }
+    }
+
+    private var logView: some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(appState.binaryManager.logLines) { line in
+                    ForEach(manager.logLines) { line in
                         Text(line.text)
                             .font(.system(size: 12, design: .monospaced))
-                            .foregroundStyle(line.isError ? Color(red: 1, green: 0.4, blue: 0.3) : Color(red: 0.2, green: 0.9, blue: 0.2))
+                            .foregroundStyle(line.isError
+                                ? Color(red: 1, green: 0.4, blue: 0.3)
+                                : Color(red: 0.2, green: 0.9, blue: 0.2))
                             .textSelection(.enabled)
-                            .frame(width: consoleWidth, alignment: .leading)
+                            .frame(maxWidth: .infinity, alignment: .leading)
                             .id(line.id)
                     }
 
-                    if appState.binaryManager.logLines.isEmpty {
+                    if manager.logLines.isEmpty {
                         Text("No output yet.")
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.secondary)
@@ -28,25 +50,99 @@ struct ConsoleView: View {
                 .padding(10)
             }
             .background(Color.black)
-            .frame(minWidth: consoleWidth + 20, minHeight: 200)
-            .onChange(of: appState.binaryManager.logLines.count) {
-                if let last = appState.binaryManager.logLines.last {
+            .onChange(of: manager.logLines.count) {
+                if let last = manager.logLines.last {
                     withAnimation(nil) {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
                 }
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    appState.binaryManager.clearLog()
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .help("Clear console")
-                .disabled(appState.binaryManager.logLines.isEmpty)
+    }
+
+    @ViewBuilder
+    private var controlButtons: some View {
+        switch manager.state {
+        case .running:
+            Button("Restart") { manager.restart() }
+            Button("Stop", role: .destructive) { manager.stop() }
+        case .stopped, .crashed:
+            Button("Start") { manager.start() }
+                .disabled(manager.binaryURL == nil)
+        case .starting:
+            ProgressView().scaleEffect(0.7)
+        case .notConfigured:
+            EmptyView()
+        }
+    }
+}
+
+// MARK: - Header
+
+private struct ConsoleHeaderView: View {
+    let manager: BinaryManager
+
+    var body: some View {
+        HStack(spacing: 16) {
+            // State indicator
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(stateColor)
+                    .frame(width: 8, height: 8)
+                Text(manager.state.label)
+                    .font(.subheadline.weight(.medium))
             }
+
+            Divider().frame(height: 16)
+
+            // Binary info
+            if let url = manager.binaryURL {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(url.lastPathComponent)
+                        .font(.subheadline.weight(.medium))
+                    Text(url.deletingLastPathComponent().path)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                Text("Binary not configured")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            // PID + uptime
+            if case .running(let pid) = manager.state {
+                HStack(spacing: 12) {
+                    LabeledContent("PID") {
+                        Text("\(pid)")
+                            .font(.system(.caption, design: .monospaced))
+                    }
+
+                    if let startedAt = manager.startedAt {
+                        LabeledContent("Uptime") {
+                            Text(startedAt, style: .timer)
+                                .font(.system(.caption, design: .monospaced))
+                                .monospacedDigit()
+                        }
+                    }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    private var stateColor: Color {
+        switch manager.state {
+        case .running:   .green
+        case .starting:  .yellow
+        case .crashed:   .red
+        case .stopped, .notConfigured: .secondary
         }
     }
 }
