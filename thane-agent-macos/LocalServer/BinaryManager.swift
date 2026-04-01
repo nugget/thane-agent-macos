@@ -62,6 +62,22 @@ final class BinaryManager {
         }
     }
 
+    /// Working directory for the thane process. Thane's config discovery
+    /// includes CWD, so ~/Thane/config.yaml is found automatically when
+    /// workspaceURL is ~/Thane/. Defaults to ~/Thane/ on first run.
+    var workspaceURL: URL {
+        didSet {
+            UserDefaults.standard.set(workspaceURL.path, forKey: "workspacePath")
+        }
+    }
+
+    /// Explicit config path. Leave nil to rely on CWD + thane's discovery order.
+    var configURL: URL? {
+        didSet {
+            UserDefaults.standard.set(configURL?.path, forKey: "configPath")
+        }
+    }
+
     private var process: Process?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
@@ -96,6 +112,12 @@ final class BinaryManager {
                 FileManager.default.fileExists(atPath: $0.path)
             }
         }
+        workspaceURL = UserDefaults.standard.string(forKey: "workspacePath")
+            .map { URL(fileURLWithPath: $0) }
+            ?? URL.homeDirectory.appending(path: "Thane")
+        if let path = UserDefaults.standard.string(forKey: "configPath") {
+            configURL = URL(fileURLWithPath: path)
+        }
         refreshState()
     }
 
@@ -111,7 +133,12 @@ final class BinaryManager {
 
         let proc = Process()
         proc.executableURL = url
-        proc.arguments = ["serve"]
+        proc.currentDirectoryURL = workspaceURL
+        var args = ["serve"]
+        if let configPath = configURL?.path {
+            args += ["--config", configPath]
+        }
+        proc.arguments = args
 
         let out = Pipe()
         let err = Pipe()

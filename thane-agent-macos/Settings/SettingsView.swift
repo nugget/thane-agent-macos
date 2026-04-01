@@ -120,39 +120,41 @@ struct ServerSettingsView: View {
 struct LocalServerSettingsView: View {
     @Environment(AppState.self) private var appState
     @State private var isPickingBinary = false
+    @State private var isPickingWorkspace = false
+    @State private var isPickingConfig = false
 
     private var manager: BinaryManager { appState.binaryManager }
 
     var body: some View {
         Form {
             Section("Binary") {
-                HStack {
-                    if let url = manager.binaryURL {
-                        Text(url.path)
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    } else {
-                        Text("Not found")
-                            .foregroundStyle(.secondary)
-                    }
-
-                    Spacer()
-
-                    Button("Browse...") { isPickingBinary = true }
-                        .fileImporter(
-                            isPresented: $isPickingBinary,
-                            allowedContentTypes: [.unixExecutable],
-                            onCompletion: handleFilePick
-                        )
-                }
-
-                if manager.binaryURL == nil {
-                    Text("Looking in: \(BinaryManager.searchPaths.map(\.path).joined(separator: ", "))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                pathRow(
+                    label: "Executable",
+                    url: manager.binaryURL,
+                    placeholder: "Not found",
+                    hint: "Search paths: \(BinaryManager.searchPaths.map(\.lastPathComponent).joined(separator: ", "))",
+                    isPicking: $isPickingBinary,
+                    contentTypes: [.unixExecutable],
+                    onPick: { manager.binaryURL = $0 }
+                )
+                pathRow(
+                    label: "Workspace",
+                    url: manager.workspaceURL,
+                    placeholder: "~/Thane/",
+                    hint: "Working directory — thane finds config.yaml here automatically",
+                    isPicking: $isPickingWorkspace,
+                    contentTypes: [.folder],
+                    onPick: { manager.workspaceURL = $0 }
+                )
+                pathRow(
+                    label: "Config",
+                    url: manager.configURL,
+                    placeholder: "Auto (CWD + thane's discovery order)",
+                    hint: "Override only if config.yaml isn't in the workspace",
+                    isPicking: $isPickingConfig,
+                    contentTypes: [.yaml, .data],
+                    onPick: { manager.configURL = $0 }
+                )
             }
 
             Section("Status") {
@@ -210,13 +212,45 @@ struct LocalServerSettingsView: View {
         }
     }
 
-    private func handleFilePick(_ result: Result<URL, Error>) {
-        guard case .success(let url) = result else { return }
-        // fileImporter returns a security-scoped URL. Resolve it to a plain
-        // path so BinaryManager can launch it via Process without needing to
-        // manage scope lifetimes across sessions.
-        let accessed = url.startAccessingSecurityScopedResource()
-        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-        manager.binaryURL = URL(fileURLWithPath: url.path)
+    @ViewBuilder
+    private func pathRow(
+        label: String,
+        url: URL?,
+        placeholder: String,
+        hint: String,
+        isPicking: Binding<Bool>,
+        contentTypes: [UTType],
+        onPick: @escaping (URL) -> Void
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(label)
+                    .frame(width: 70, alignment: .leading)
+
+                Text(url?.path ?? placeholder)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(url != nil ? .primary : .secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer()
+
+                Button("Browse...") { isPicking.wrappedValue = true }
+                    .fileImporter(
+                        isPresented: isPicking,
+                        allowedContentTypes: contentTypes,
+                        onCompletion: { result in
+                            guard case .success(let picked) = result else { return }
+                            let accessed = picked.startAccessingSecurityScopedResource()
+                            defer { if accessed { picked.stopAccessingSecurityScopedResource() } }
+                            onPick(URL(fileURLWithPath: picked.path))
+                        }
+                    )
+            }
+
+            Text(hint)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
     }
 }
