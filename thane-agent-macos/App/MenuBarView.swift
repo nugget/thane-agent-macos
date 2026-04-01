@@ -18,6 +18,14 @@ struct MenuBarView: View {
 
             Divider()
 
+            if appState.binaryManager.state != .notConfigured {
+                Button("Open Console") {
+                    NotificationCenter.default.post(name: .openConsoleWindow, object: nil)
+                }
+            }
+
+            Divider()
+
             SettingsLink {
                 Text("Settings...")
             }

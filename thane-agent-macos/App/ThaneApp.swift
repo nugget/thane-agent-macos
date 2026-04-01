@@ -3,6 +3,7 @@ import SwiftData
 
 @main
 struct ThaneApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @State private var appState = AppState()
 
     private static let modelContainer: ModelContainer = {
@@ -19,6 +20,7 @@ struct ThaneApp: App {
         WindowGroup {
             MainView()
                 .environment(appState)
+                .onAppear { appDelegate.appState = appState }
         }
         .modelContainer(Self.modelContainer)
 
