@@ -162,6 +162,47 @@ struct LocalServerSettingsView: View {
                 )
             }
 
+            Section {
+                Picker("Scope", selection: Binding(
+                    get: { manager.fileAccessScope },
+                    set: { manager.fileAccessScope = $0 }
+                )) {
+                    ForEach(FileAccessScope.allCases, id: \.self) { scope in
+                        Text(scope.label).tag(scope)
+                    }
+                }
+
+                if manager.fileAccessScope == .fullDisk {
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .foregroundStyle(.yellow)
+                        Text("Full Disk Access must be granted manually in System Settings.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Button("Open…") {
+                            NSWorkspace.shared.open(
+                                URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
+                            )
+                        }
+                        .font(.caption)
+                    }
+                }
+
+                HStack {
+                    Spacer()
+                    Button("Re-check Permissions") {
+                        manager.probeFileAccess()
+                    }
+                    .disabled(manager.binaryURL == nil)
+                }
+            } header: {
+                Text("File Access")
+            } footer: {
+                Text("Permissions are probed at launch so macOS shows any required dialogs upfront, before thane starts.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             Section("Status") {
                 HStack {
                     statusLabel
