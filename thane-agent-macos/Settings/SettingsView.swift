@@ -5,7 +5,7 @@ import AppKit
 struct SettingsView: View {
     var body: some View {
         TabView {
-            Tab("Server", systemImage: "network") {
+            Tab("Remote", systemImage: "network") {
                 ServerSettingsView()
             }
             Tab("Local", systemImage: "desktopcomputer") {

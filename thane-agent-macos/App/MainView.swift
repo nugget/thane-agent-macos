@@ -8,7 +8,11 @@ struct MainView: View {
     @State private var selectedConversation: Conversation?
 
     private var ollamaURL: URL? {
-        defaultConfigs.first?.ollamaURL
+        if let remote = defaultConfigs.first?.ollamaURL { return remote }
+        if appState.binaryManager.state.isRunning {
+            return URL(string: "http://localhost:11434")
+        }
+        return nil
     }
 
     var body: some View {
@@ -32,11 +36,14 @@ struct MainView: View {
     private var emptyState: some View {
         VStack(spacing: 16) {
             if ollamaURL == nil {
-                ContentUnavailableView(
-                    "No Server Configured",
-                    systemImage: "server.rack",
-                    description: Text("Add a server in [Settings](settings:) to get started.")
-                )
+                ContentUnavailableView {
+                    Label("No Server Configured", systemImage: "server.rack")
+                } description: {
+                    Text("Connect to a remote server or start a local binary.")
+                } actions: {
+                    SettingsLink(label: { Text("Open Settings") })
+                        .buttonStyle(.borderedProminent)
+                }
             } else {
                 ContentUnavailableView {
                     Label("No Conversation Selected", systemImage: "bubble.left.and.bubble.right")
