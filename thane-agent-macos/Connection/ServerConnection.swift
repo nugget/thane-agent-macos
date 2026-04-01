@@ -190,9 +190,10 @@ final class ServerConnection {
                 // Initially empty — capabilities are registered as platform providers are implemented
             ]
         )
+        // Fire-and-forget: the current server logs and discards this message without
+        // sending a result ack. When the server gains capability handling, add
+        // waitForResponse(id:timeout:) back here.
         try await sendJSON(msg)
-        // Await acknowledgment
-        _ = try await waitForResponse(id: id, timeout: 10)
     }
 
     private func readLoop() async throws {
