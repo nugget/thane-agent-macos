@@ -91,6 +91,7 @@ struct ConsoleView: View {
             .defaultScrollAnchor(.bottom)
             .scrollIndicators(.visible)
             .background(Color.black)
+            .padding(.bottom, 8)
             .onChange(of: filteredLines.count) {
                 if let last = filteredLines.last {
                     withAnimation(nil) {
