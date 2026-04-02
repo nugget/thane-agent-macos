@@ -341,9 +341,11 @@ struct PermissionsSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .task {
-            await appState.refreshCalendarAuthorization()
-            await manager.refreshPreviouslyRequested()
+        .onAppear {
+            Task {
+                await appState.refreshCalendarAuthorization()
+                await manager.refreshPreviouslyRequested()
+            }
         }
     }
 
