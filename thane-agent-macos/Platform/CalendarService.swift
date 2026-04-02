@@ -180,19 +180,21 @@ actor CalendarService {
         // EKEventStore.requestFullAccessToEvents() needs the main run loop to be
         // servicing events for the TCC dialog to appear. Use a dedicated store on
         // the main actor so we don't send the actor-isolated store across boundaries.
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+        let granted = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
             Task { @MainActor in
                 let requestStore = EKEventStore()
-                requestStore.requestFullAccessToEvents { _, error in
+                requestStore.requestFullAccessToEvents { granted, error in
                     if let error {
                         continuation.resume(throwing: error)
                     } else {
-                        continuation.resume()
+                        continuation.resume(returning: granted)
                     }
                 }
             }
         }
-        return authorizationState()
+        // The completion handler result is authoritative — tccd may not have
+        // committed to the database yet when authorizationStatus(for:) is called.
+        return granted ? .fullAccess : .denied
     }
 
     func listEvents(request: CalendarListRequest) async throws -> CalendarListResponse {
