@@ -11,8 +11,10 @@ final class AppState {
     let platformRouter = PlatformServiceRouter()
     let binaryManager = BinaryManager()
     let permissionsManager = PermissionsManager()
+    let calendarService = CalendarService()
 
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "app")
+    private(set) var calendarAuthorization: CalendarAuthorizationState = .notDetermined
 
     var connectionState: ServerConnection.State {
         connection.state
@@ -69,6 +71,12 @@ final class AppState {
     private(set) var activeServerURL: URL?
 
     init() {
+        platformRouter.register(
+            capability: "macos.calendar",
+            handler: CalendarPlatformHandler(calendarService: calendarService)
+        )
+        connection.registeredCapabilities = platformRouter.capabilities
+
         connection.onPlatformRequest = { [weak self] request in
             guard let self else {
                 return PlatformResponse(
@@ -93,6 +101,10 @@ final class AppState {
             default:
                 break
             }
+        }
+
+        Task {
+            await refreshCalendarAuthorization()
         }
 
         binaryManager.autoStartIfNeeded()
@@ -164,5 +176,18 @@ final class AppState {
     func loadToken(for config: ServerConfig) -> String? {
         let tokenKey = "token-\(config.clientID)"
         return KeychainHelper.load(key: tokenKey)
+    }
+
+    func refreshCalendarAuthorization() async {
+        calendarAuthorization = await calendarService.authorizationState()
+    }
+
+    func requestCalendarAccess() async {
+        do {
+            calendarAuthorization = try await calendarService.requestAccessIfNeeded()
+        } catch {
+            logger.error("Failed to request calendar access: \(error.localizedDescription)")
+            calendarAuthorization = await calendarService.authorizationState()
+        }
     }
 }

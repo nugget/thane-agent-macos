@@ -1,6 +1,10 @@
 import Foundation
 import os
 
+protocol PlatformServiceError: LocalizedError {
+    var code: String { get }
+}
+
 /// Routes incoming platform_request messages to the appropriate handler.
 /// Each platform provider (Contacts, Calendar, etc.) registers itself here.
 @MainActor
@@ -53,13 +57,14 @@ final class PlatformServiceRouter {
                 error: nil
             )
         } catch {
+            let code = (error as? PlatformServiceError)?.code ?? "handler_error"
             logger.error("Handler error for \(request.capability).\(request.method): \(error.localizedDescription)")
             return PlatformResponse(
                 id: request.id,
                 type: "result",
                 success: false,
                 result: nil,
-                error: WSError(code: "handler_error", message: error.localizedDescription)
+                error: WSError(code: code, message: error.localizedDescription)
             )
         }
     }

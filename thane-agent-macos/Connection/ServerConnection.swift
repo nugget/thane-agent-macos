@@ -36,6 +36,7 @@ final class ServerConnection {
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "connection")
 
     var onPlatformRequest: ((PlatformRequest) async -> PlatformResponse)?
+    var registeredCapabilities: [Capability] = []
 
     // MARK: - Public API
 
@@ -196,13 +197,8 @@ final class ServerConnection {
         let msg = RegisterCapabilitiesMessage(
             id: id,
             type: "register_capabilities",
-            capabilities: [
-                // Initially empty — capabilities are registered as platform providers are implemented
-            ]
+            capabilities: registeredCapabilities
         )
-        // Fire-and-forget: the current server logs and discards this message without
-        // sending a result ack. When the server gains capability handling, add
-        // waitForResponse(id:timeout:) back here.
         try await sendJSON(msg)
     }
 

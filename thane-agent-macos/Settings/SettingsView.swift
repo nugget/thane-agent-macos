@@ -275,6 +275,16 @@ struct PermissionsSettingsView: View {
 
     var body: some View {
         Form {
+            Section {
+                calendarRow
+            } header: {
+                Text("Private Data")
+            } footer: {
+                Text("Calendar access powers the macOS calendar tool exposed back to a connected Thane server.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
             // Full Disk Access — requires manual action in System Settings
             Section {
                 VStack(alignment: .leading, spacing: 8) {
@@ -331,7 +341,29 @@ struct PermissionsSettingsView: View {
         }
         .formStyle(.grouped)
         .padding()
-        .task { await manager.refreshPreviouslyRequested() }
+        .task {
+            await appState.refreshCalendarAuthorization()
+            await manager.refreshPreviouslyRequested()
+        }
+    }
+
+    private var calendarRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Calendars")
+                Text("EventKit access for upcoming meetings and scheduling context.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 6) {
+                calendarStatusBadge(appState.calendarAuthorization)
+                calendarActionButton(appState.calendarAuthorization)
+            }
+        }
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
@@ -401,6 +433,50 @@ struct PermissionsSettingsView: View {
             Button("Open Settings…") {
                 NSWorkspace.shared.open(
                     URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!
+                )
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+    }
+
+    @ViewBuilder
+    private func calendarStatusBadge(_ status: CalendarAuthorizationState) -> some View {
+        switch status {
+        case .notDetermined:
+            Text("Not Requested")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        case .fullAccess:
+            Label("Granted", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .denied, .restricted, .writeOnly, .unknown:
+            Label(status.label, systemImage: "xmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+    }
+
+    @ViewBuilder
+    private func calendarActionButton(_ status: CalendarAuthorizationState) -> some View {
+        switch status {
+        case .notDetermined:
+            Button("Request Access") {
+                Task { await appState.requestCalendarAccess() }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        case .fullAccess, .unknown:
+            Button("Re-check") {
+                Task { await appState.refreshCalendarAuthorization() }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        case .denied, .restricted, .writeOnly:
+            Button("Open Settings…") {
+                NSWorkspace.shared.open(
+                    URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!
                 )
             }
             .buttonStyle(.bordered)

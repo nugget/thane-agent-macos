@@ -141,6 +141,11 @@ struct AnyCodable: Codable, @unchecked Sendable {
         self.value = value
     }
 
+    static func fromEncodable<T: Encodable>(_ value: T) throws -> AnyCodable {
+        let data = try JSONEncoder().encode(value)
+        return try JSONDecoder().decode(AnyCodable.self, from: data)
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
@@ -185,4 +190,9 @@ struct AnyCodable: Codable, @unchecked Sendable {
             throw EncodingError.invalidValue(value, .init(codingPath: encoder.codingPath, debugDescription: "Unsupported type: \(type(of: value))"))
         }
     }
+}
+
+func decodePlatformParams<T: Decodable>(_ type: T.Type, from params: [String: AnyCodable]) throws -> T {
+    let data = try JSONEncoder().encode(params)
+    return try JSONDecoder().decode(type, from: data)
 }
