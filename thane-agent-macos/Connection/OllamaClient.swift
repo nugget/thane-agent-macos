@@ -37,7 +37,7 @@ struct OllamaClient {
     /// Stream a chat completion. Yields string tokens as they arrive.
     func chat(messages: [OllamaMessage]) -> AsyncThrowingStream<String, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let producer = Task {
                 do {
                     let url = baseURL.appending(path: "api/chat")
                     var request = URLRequest(url: url)
@@ -78,6 +78,9 @@ struct OllamaClient {
                 } catch {
                     continuation.finish(throwing: error)
                 }
+            }
+            continuation.onTermination = { @Sendable _ in
+                producer.cancel()
             }
         }
     }

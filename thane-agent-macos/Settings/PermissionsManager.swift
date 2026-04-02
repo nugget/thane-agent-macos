@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import os
 
@@ -133,7 +134,7 @@ final class PermissionsManager {
                     }
                 }
             }
-            return denied > 0 && granted == 0 ? .denied : .granted
+            return denied > 0 ? .denied : .granted
         }.value
 
         logger.info("Permission \(categoryID): \(status.rawValue)")
@@ -177,7 +178,10 @@ final class PermissionsManager {
     private func statusKey(_ id: String) -> String { "perm_\(id)" }
 
     private func customCategoryID(for url: URL) -> String {
-        "custom_\(url.path.hashValue)"
+        let data = Data(url.path.utf8)
+        let digest = SHA256.hash(data: data)
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return "custom_\(hex)"
     }
 
     private func persistCustomPaths() {

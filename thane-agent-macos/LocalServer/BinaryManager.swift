@@ -158,11 +158,22 @@ final class BinaryManager {
     /// if the server was running when the app last quit. All other TCC probing is user-initiated
     /// via the Permissions settings tab.
     func autoStartIfNeeded() {
-        let workspace = workspaceURL
-        Task.detached { _ = try? FileManager.default.contentsOfDirectory(atPath: workspace.path) }
         guard shouldRun, case .stopped = state else { return }
-        logger.info("Auto-starting local server (shouldRun=true from previous session)")
-        start()
+        let workspace = workspaceURL
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                _ = try FileManager.default.contentsOfDirectory(atPath: workspace.path)
+            } catch {
+                logger.error("Workspace is inaccessible at startup: \(workspace.path, privacy: .public); auto-start aborted: \(error.localizedDescription, privacy: .public)")
+                append("Auto-start aborted: workspace is inaccessible at \(workspace.path)", isError: true)
+                shouldRun = false
+                return
+            }
+
+            logger.info("Auto-starting local server (shouldRun=true from previous session)")
+            start()
+        }
     }
 
     func start() {

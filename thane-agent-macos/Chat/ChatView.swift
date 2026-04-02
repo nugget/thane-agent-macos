@@ -19,9 +19,10 @@ struct ChatView: View {
         }
         .navigationTitle(conversation.title)
         .navigationSubtitle(appState.statusText)
-        .onAppear { setupViewModel() }
-        .onChange(of: conversation.id) { setupViewModel() }
-        .onChange(of: ollamaURL) { setupViewModel() }
+        .onAppear { resetViewModel() }
+        .onChange(of: conversation.id) { resetViewModel() }
+        .onChange(of: ollamaURL) { resetViewModel() }
+        .onDisappear { cancelViewModel() }
     }
 
     // MARK: - Message List
@@ -129,6 +130,15 @@ struct ChatView: View {
                 proxy.scrollTo(last.id, anchor: .bottom)
             }
         }
+    }
+
+    private func resetViewModel() {
+        cancelViewModel()
+        setupViewModel()
+    }
+
+    private func cancelViewModel() {
+        viewModel?.cancel()
     }
 
     private func setupViewModel() {

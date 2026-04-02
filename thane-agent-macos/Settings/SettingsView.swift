@@ -112,7 +112,11 @@ struct ServerSettingsView: View {
             cfg = ServerConfig(name: "Default", urlString: serverURL)
             modelContext.insert(cfg)
         }
-        if !token.isEmpty { appState.saveToken(token, for: cfg) }
+        if !token.isEmpty {
+            appState.saveToken(token, for: cfg)
+        } else {
+            appState.deleteToken(for: cfg)
+        }
         try? modelContext.save()
     }
 

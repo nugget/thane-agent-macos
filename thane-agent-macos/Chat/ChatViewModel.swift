@@ -60,6 +60,9 @@ final class ChatViewModel {
 
                 streamingContent = ""
                 isStreaming = false
+            } catch is CancellationError {
+                isStreaming = false
+                streamingContent = ""
             } catch {
                 logger.error("Chat error: \(error.localizedDescription)")
                 self.error = error.localizedDescription
@@ -74,5 +77,6 @@ final class ChatViewModel {
         streamingTask = nil
         isStreaming = false
         streamingContent = ""
+        error = nil
     }
 }

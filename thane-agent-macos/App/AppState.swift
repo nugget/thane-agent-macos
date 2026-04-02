@@ -155,6 +155,11 @@ final class AppState {
         }
     }
 
+    func deleteToken(for config: ServerConfig) {
+        let tokenKey = "token-\(config.clientID)"
+        KeychainHelper.delete(key: tokenKey)
+    }
+
     /// Load the stored token for a server config.
     func loadToken(for config: ServerConfig) -> String? {
         let tokenKey = "token-\(config.clientID)"

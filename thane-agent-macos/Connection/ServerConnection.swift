@@ -1,6 +1,11 @@
 import Foundation
 import os
 
+private struct ReceivedMessage {
+    let envelope: WSMessage
+    let rawData: Data
+}
+
 /// Manages the WebSocket connection to a thane-ai-agent server.
 /// Handles auth handshake, capability registration, message routing,
 /// and reconnection with exponential backoff.
@@ -51,8 +56,7 @@ final class ServerConnection {
         reconnectTask = nil
         readLoopTask?.cancel()
         readLoopTask = nil
-        webSocketTask?.cancel(with: .goingAway, reason: nil)
-        webSocketTask = nil
+        cleanupTransport(closeCode: .goingAway)
         cancelAllPending(error: CancellationError())
         Task { @MainActor in
             state = .disconnected
@@ -77,10 +81,13 @@ final class ServerConnection {
             message: message,
             stream: stream
         )
-        try await sendJSON(request)
-        // Streaming responses arrive via readLoop and are dispatched to the callback.
-        // Register a stream handler keyed by message ID.
         streamHandlers[id] = onStream
+        do {
+            try await sendJSON(request)
+        } catch {
+            streamHandlers.removeValue(forKey: id)
+            throw error
+        }
     }
 
     // MARK: - Private
@@ -94,6 +101,8 @@ final class ServerConnection {
     }
 
     private func performConnect(url: URL, token: String, clientID: String, clientName: String) {
+        cleanupTransport(closeCode: .goingAway)
+
         // Build the WebSocket URL. Using wss:// (instead of https://) forces HTTP/1.1
         // upgrade (RFC 6455) rather than HTTP/2 extended CONNECT (RFC 8441), which is
         // required for compatibility with Traefik and most reverse proxies.
@@ -125,10 +134,10 @@ final class ServerConnection {
             // Step 1: Receive auth_required
             Task { @MainActor in state = .authenticating }
             let authReq = try await receiveMessage()
-            guard authReq.type == "auth_required" else {
-                throw ConnectionError.unexpectedMessage("Expected auth_required, got \(authReq.type)")
+            guard authReq.envelope.type == "auth_required" else {
+                throw ConnectionError.unexpectedMessage("Expected auth_required, got \(authReq.envelope.type)")
             }
-            if let version = try? JSONDecoder().decode(AuthRequiredMessage.self, from: encodeToData(authReq)).version {
+            if let version = try? JSONDecoder().decode(AuthRequiredMessage.self, from: authReq.rawData).version {
                 Task { @MainActor in serverVersion = version }
             }
 
@@ -143,14 +152,14 @@ final class ServerConnection {
 
             // Step 3: Receive auth_ok or auth_failed
             let authResp = try await receiveMessage()
-            if authResp.type == "auth_failed" {
-                let invalid = try JSONDecoder().decode(AuthInvalidMessage.self, from: encodeToData(authResp))
+            if authResp.envelope.type == "auth_failed" {
+                let invalid = try JSONDecoder().decode(AuthInvalidMessage.self, from: authResp.rawData)
                 throw ConnectionError.authFailed(invalid.message)
             }
-            guard authResp.type == "auth_ok" else {
-                throw ConnectionError.unexpectedMessage("Expected auth_ok, got \(authResp.type)")
+            guard authResp.envelope.type == "auth_ok" else {
+                throw ConnectionError.unexpectedMessage("Expected auth_ok, got \(authResp.envelope.type)")
             }
-            if let authOK = try? JSONDecoder().decode(AuthOKMessage.self, from: encodeToData(authResp)) {
+            if let authOK = try? JSONDecoder().decode(AuthOKMessage.self, from: authResp.rawData) {
                 Task { @MainActor in
                     providerID = authOK.providerID
                     account = authOK.account
@@ -174,6 +183,7 @@ final class ServerConnection {
         } catch {
             logger.error("Connection error: \(error.localizedDescription)")
             Task { @MainActor in lastError = error.localizedDescription }
+            cleanupTransport(closeCode: .abnormalClosure)
             cancelAllPending(error: error)
             if !intentionalDisconnect {
                 scheduleReconnect(token: token, clientID: clientID, clientName: clientName)
@@ -198,7 +208,8 @@ final class ServerConnection {
 
     private func readLoop() async throws {
         while !Task.isCancelled {
-            let message = try await receiveMessage()
+            let received = try await receiveMessage()
+            let message = received.envelope
 
             switch message.type {
             case "ping":
@@ -210,8 +221,7 @@ final class ServerConnection {
                 }
 
             case "platform_request":
-                let data = try encodeToData(message)
-                let request = try JSONDecoder().decode(PlatformRequest.self, from: data)
+                let request = try JSONDecoder().decode(PlatformRequest.self, from: received.rawData)
                 Task { [weak self] in
                     guard let self, let handler = self.onPlatformRequest else {
                         let errorResp = PlatformResponse(
@@ -229,8 +239,7 @@ final class ServerConnection {
                 }
 
             case "chat_stream":
-                let data = try encodeToData(message)
-                let stream = try JSONDecoder().decode(ChatStreamMessage.self, from: data)
+                let stream = try JSONDecoder().decode(ChatStreamMessage.self, from: received.rawData)
                 let handler = streamHandlers[stream.id]
                 if stream.data.kind == "done" {
                     streamHandlers.removeValue(forKey: stream.id)
@@ -250,10 +259,13 @@ final class ServerConnection {
         guard let string = String(data: data, encoding: .utf8) else {
             throw ConnectionError.encodingFailed
         }
-        try await webSocketTask?.send(.string(string))
+        guard let task = webSocketTask else {
+            throw ConnectionError.notConnected
+        }
+        try await task.send(.string(string))
     }
 
-    private func receiveMessage() async throws -> WSMessage {
+    private func receiveMessage() async throws -> ReceivedMessage {
         guard let task = webSocketTask else {
             throw ConnectionError.notConnected
         }
@@ -263,9 +275,11 @@ final class ServerConnection {
             guard let data = text.data(using: .utf8) else {
                 throw ConnectionError.decodingFailed
             }
-            return try JSONDecoder().decode(WSMessage.self, from: data)
+            let envelope = try JSONDecoder().decode(WSMessage.self, from: data)
+            return ReceivedMessage(envelope: envelope, rawData: data)
         case .data(let data):
-            return try JSONDecoder().decode(WSMessage.self, from: data)
+            let envelope = try JSONDecoder().decode(WSMessage.self, from: data)
+            return ReceivedMessage(envelope: envelope, rawData: data)
         @unknown default:
             throw ConnectionError.unexpectedMessage("Unknown WebSocket message format")
         }
@@ -342,8 +356,11 @@ final class ServerConnection {
 
     // MARK: - Helpers
 
-    private func encodeToData(_ value: some Encodable) throws -> Data {
-        try JSONEncoder().encode(value)
+    private func cleanupTransport(closeCode: URLSessionWebSocketTask.CloseCode) {
+        webSocketTask?.cancel(with: closeCode, reason: nil)
+        webSocketTask = nil
+        session?.invalidateAndCancel()
+        session = nil
     }
 }
 

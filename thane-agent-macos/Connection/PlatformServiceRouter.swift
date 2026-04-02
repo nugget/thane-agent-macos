@@ -3,11 +3,10 @@ import os
 
 /// Routes incoming platform_request messages to the appropriate handler.
 /// Each platform provider (Contacts, Calendar, etc.) registers itself here.
-final class PlatformServiceRouter: Sendable {
+@MainActor
+final class PlatformServiceRouter {
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "platform")
-
-    // nonisolated(unsafe) because handlers are registered at startup before any requests arrive
-    nonisolated(unsafe) private var handlers: [String: PlatformServiceHandler] = [:]
+    private var handlers: [String: PlatformServiceHandler] = [:]
 
     func register(capability: String, handler: PlatformServiceHandler) {
         handlers[capability] = handler
