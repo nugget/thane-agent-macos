@@ -46,7 +46,7 @@ enum CalendarAuthorizationState: String, Equatable, Sendable {
     }
 }
 
-enum CalendarServiceError: Equatable, PlatformServiceError {
+enum CalendarServiceError: PlatformServiceError, Sendable {
     case invalidTimestamp(String, String)
     case invalidWindow
     case accessDenied
@@ -160,9 +160,11 @@ struct CalendarEventSummary: Codable, Equatable, Sendable {
 
 actor CalendarService {
     private let store: EKEventStore
+    private let eventTimestampFormatter: ISO8601DateFormatter
 
     init(store: EKEventStore = EKEventStore()) {
         self.store = store
+        self.eventTimestampFormatter = Self.makeEventTimestampFormatter()
     }
 
     func authorizationState() -> CalendarAuthorizationState {
@@ -218,7 +220,7 @@ actor CalendarService {
             events = Array(events.prefix(limit))
         }
 
-        return CalendarListResponse(events: events.map(Self.makeSummary))
+        return CalendarListResponse(events: events.map(makeSummary))
     }
 
     private func ensureReadAccess() async throws {
@@ -261,15 +263,15 @@ actor CalendarService {
         return matches
     }
 
-    private static func makeSummary(event: EKEvent) -> CalendarEventSummary {
+    private func makeSummary(event: EKEvent) -> CalendarEventSummary {
         CalendarEventSummary(
-            title: normalizedOrNil(event.title) ?? "(untitled event)",
+            title: Self.normalizedOrNil(event.title) ?? "(untitled event)",
             calendar: event.calendar.title,
             start: formatTimestamp(event.startDate),
             end: formatTimestamp(event.endDate),
             allDay: event.isAllDay,
-            location: normalizedOrNil(event.location),
-            notesExcerpt: truncateNotes(event.notes),
+            location: Self.normalizedOrNil(event.location),
+            notesExcerpt: Self.truncateNotes(event.notes),
             url: event.url?.absoluteString
         )
     }
@@ -305,10 +307,14 @@ actor CalendarService {
         return String(normalized[..<index]) + "..."
     }
 
-    nonisolated private static func formatTimestamp(_ date: Date) -> String {
+    private func formatTimestamp(_ date: Date) -> String {
+        eventTimestampFormatter.string(from: date)
+    }
+
+    nonisolated private static func makeEventTimestampFormatter() -> ISO8601DateFormatter {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
-        return formatter.string(from: date)
+        return formatter
     }
 }
 
