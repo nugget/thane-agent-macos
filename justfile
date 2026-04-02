@@ -4,7 +4,7 @@ app           := "thane-agent-macos"
 build-dir     := "build"
 
 # Site-specific — set in .env (see .env.example)
-deploy-host    := env("DEPLOY_HOST")
+deploy-host    := env("DEPLOY_HOST", "")
 deploy-path    := env("DEPLOY_PATH", "/Applications")
 notary-profile := env("NOTARYTOOL_PROFILE", "notarytool")
 
