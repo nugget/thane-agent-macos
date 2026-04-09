@@ -45,7 +45,7 @@ git config --local gpg.ssh.program ssh-keygen
 - **AppState.swift** — Central `@Observable` coordinator; owns `ServerConnection`, `BinaryManager`, `UpdateManager`, `PlatformServiceRouter`
 - **BinaryManager.swift** — Local `thane` process lifecycle, health monitoring, config parsing, code signature inspection
 - **UpdateManager.swift** — GitHub release checking, binary download/verify/install with SHA-256 + CryptoKit
-- **CodeSignatureInfo.swift** — `BinaryPedigree` protocol, `AppleCodeSignature` (Security.framework), `ThaneEmbeddedPedigree` (future x509)
+- **CodeSignatureInfo.swift** — `AppleCodeSignature` (Security.framework) for code signing and notarization inspection
 - **ServerConnection.swift** — WebSocket client with auth handshake and platform request routing
 - **ProcessHealthView.swift** — Live process health status, resource stats, code signature summary
 - Data models use SwiftData (`ServerConfig`, `Conversation`, `ChatMessage`)

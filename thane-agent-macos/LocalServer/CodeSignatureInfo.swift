@@ -1,23 +1,13 @@
 import Foundation
 import Security
 
-// MARK: - Binary Pedigree Protocol
-
-/// Abstraction for binary provenance information.
-///
-/// `AppleCodeSignature` is the current concrete implementation, using
-/// Security.framework to inspect macOS code signatures. When thane-ai-agent
-/// gains its own x509-based binary pedigree, a new conforming type can be
-/// added without changing the UI or inspection API.
-protocol BinaryPedigree: Sendable {
-    var summary: String { get }
-    var isVerified: Bool { get }
-    var details: [(label: String, value: String)] { get }
-}
-
 // MARK: - Apple Code Signature
 
-struct AppleCodeSignature: BinaryPedigree, Sendable {
+/// Inspects and surfaces macOS code signature details for a binary.
+///
+/// Uses Security.framework (`SecStaticCode`) and `spctl` to extract
+/// Team ID, signing identity, notarization status, and certificate chain.
+struct AppleCodeSignature: Sendable {
 
     enum Status: Sendable, Equatable {
         case notarized(teamID: String, identity: String)
@@ -192,42 +182,5 @@ struct AppleCodeSignature: BinaryPedigree, Sendable {
 
         // spctl output includes "Notarized Developer ID" for notarized binaries
         return output.contains("Notarized Developer ID")
-    }
-}
-
-// MARK: - Thane Embedded Pedigree (Future)
-
-/// Placeholder for thane-ai-agent's future x509-based binary pedigree.
-///
-/// When thane releases begin embedding their own certificate chain or
-/// signature block, implement inspection here. The `BinaryPedigree`
-/// protocol ensures the UI layer can display it alongside (or instead of)
-/// the Apple code signature without structural changes.
-struct ThaneEmbeddedPedigree: BinaryPedigree, Sendable {
-    let summary: String
-    let isVerified: Bool
-    let details: [(label: String, value: String)]
-
-    /// Inspect a binary for embedded thane pedigree information.
-    /// Returns nil until thane-ai-agent implements this feature.
-    nonisolated static func inspect(binaryURL: URL) async -> ThaneEmbeddedPedigree? {
-        nil
-    }
-}
-
-// MARK: - Binary Pedigree Inspector
-
-/// Runs all available pedigree inspectors concurrently and returns results.
-enum BinaryPedigreeInspector {
-
-    struct Result: Sendable {
-        let apple: AppleCodeSignature
-        let embedded: ThaneEmbeddedPedigree?
-    }
-
-    nonisolated static func inspect(binaryURL: URL) async -> Result {
-        async let apple = AppleCodeSignature.inspect(binaryURL: binaryURL)
-        async let embedded = ThaneEmbeddedPedigree.inspect(binaryURL: binaryURL)
-        return Result(apple: await apple, embedded: await embedded)
     }
 }

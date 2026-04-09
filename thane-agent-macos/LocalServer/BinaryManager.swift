@@ -292,8 +292,7 @@ final class BinaryManager {
             codeSignature = nil
             return
         }
-        let result = await BinaryPedigreeInspector.inspect(binaryURL: url)
-        codeSignature = result.apple
+        codeSignature = await AppleCodeSignature.inspect(binaryURL: url)
     }
 
     // MARK: - Maintenance
