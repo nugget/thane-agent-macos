@@ -137,7 +137,7 @@ final class BinaryManager {
     private var stderrPipe: Pipe?
     private var restartTask: Task<Void, Never>?
     private var statsTask: Task<Void, Never>?
-    private var binaryWatchSource: (any DispatchSourceFileSystemObject)?
+    private var binaryWatcher: DirectoryWatcher?
     private var binaryWatchDebounce: Task<Void, Never>?
     private var restartAttempt = 0
     private var recentCrashTimestamps: [Date] = []
@@ -340,45 +340,19 @@ final class BinaryManager {
         stopWatchingBinary()
         guard let url = binaryURL else { return }
 
-        // Watch the parent directory — the file itself may be replaced
-        // atomically (delete + rename), which invalidates a file descriptor
-        // on the original inode.
-        let dirURL = url.deletingLastPathComponent()
-        let dirPath = dirURL.path
-
+        let dirPath = url.deletingLastPathComponent().path
         guard FileManager.default.fileExists(atPath: dirPath) else { return }
 
-        let fd = open(dirPath, O_EVTONLY)
-        guard fd >= 0 else {
-            logger.warning("Cannot open \(dirPath) for filesystem monitoring")
-            return
-        }
-
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd,
-            eventMask: [.write, .rename, .delete],
-            queue: .global(qos: .utility)
-        )
-
-        // Capture a nonisolated reference to avoid accessing @MainActor
-        // state from the GCD callback queue. The Task hops to MainActor.
-        let weakSelf = WeakSendableRef(self)
-        source.setEventHandler {
-            Task { @MainActor in
-                weakSelf.value?.handleBinaryDirectoryChange()
+        binaryWatcher = DirectoryWatcher(path: dirPath) { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.handleBinaryDirectoryChange()
             }
         }
-        source.setCancelHandler {
-            close(fd)
-        }
-        source.resume()
-        binaryWatchSource = source
         logger.info("Watching \(dirPath) for binary changes")
     }
 
     private func stopWatchingBinary() {
-        binaryWatchSource?.cancel()
-        binaryWatchSource = nil
+        binaryWatcher = nil
         binaryWatchDebounce?.cancel()
         binaryWatchDebounce = nil
     }
@@ -630,13 +604,33 @@ final class BinaryManager {
     }
 }
 
-// MARK: - Weak Sendable Reference
+// MARK: - Directory Watcher
 
-/// A `Sendable` wrapper around a weak reference to a `@MainActor`-isolated
-/// object. Allows GCD callbacks (which fire on arbitrary queues) to capture
-/// a reference without triggering actor-isolation checks at the capture site.
-/// The caller must hop to the main actor before accessing `.value`.
-private final class WeakSendableRef<T: AnyObject>: @unchecked Sendable {
-    weak var value: T?
-    init(_ value: T) { self.value = value }
+/// Wraps a kqueue-based `DispatchSource` for filesystem monitoring.
+///
+/// Lives outside the `@MainActor` default isolation so that the GCD event
+/// handler runs cleanly on a utility queue without triggering
+/// `dispatch_assert_queue_fail`. The `onChange` callback is `@Sendable`
+/// and expected to hop to the main actor itself.
+nonisolated final class DirectoryWatcher: @unchecked Sendable {
+    private var source: (any DispatchSourceFileSystemObject)?
+
+    init(path: String, onChange: @escaping @Sendable () -> Void) {
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else { return }
+
+        let src = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .rename, .delete],
+            queue: .global(qos: .utility)
+        )
+        src.setEventHandler(handler: onChange)
+        src.setCancelHandler { close(fd) }
+        src.resume()
+        source = src
+    }
+
+    deinit {
+        source?.cancel()
+    }
 }
