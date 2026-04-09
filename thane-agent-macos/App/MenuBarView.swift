@@ -27,8 +27,8 @@ struct MenuBarView: View {
             }
 
             if appState.binaryManager.state != .notConfigured {
-                Button("Open Console") {
-                    openWindow(id: "console")
+                Button("Process Health") {
+                    openWindow(id: "process-health")
                 }
             }
 

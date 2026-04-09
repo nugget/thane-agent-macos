@@ -22,7 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if appState.binaryManager.state != .notConfigured {
             let item = NSMenuItem(
-                title: "Open Console",
+                title: "Process Health",
                 action: #selector(openConsole),
                 keyEquivalent: ""
             )

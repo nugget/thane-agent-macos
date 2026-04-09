@@ -1,3 +1,4 @@
+import Darwin.POSIX
 import Foundation
 import os
 
@@ -51,16 +52,19 @@ final class BinaryManager {
         }
     }
 
-    // MARK: - Log
+    // MARK: - Health
 
-    struct LogLine: Identifiable {
-        let id = UUID()
-        let timestamp: Date
-        let text: String
-        let isError: Bool
-        /// Structured log level parsed from JSON output (DEBUG/INFO/WARN/ERROR).
-        /// Nil for non-JSON lines (internal app messages).
-        let level: String?
+    enum HealthStatus: String {
+        case healthy   = "Healthy"
+        case degraded  = "Degraded"
+        case crashLoop = "Crash Loop"
+        case stopped   = "Stopped"
+    }
+
+    struct ProcessStats {
+        var cpuPercent: Double = 0
+        var residentMemoryMB: Double = 0
+        var threadCount: Int = 0
     }
 
     // MARK: - Properties
@@ -68,7 +72,6 @@ final class BinaryManager {
     private(set) var state: State = .notConfigured {
         didSet { onStateChange?(state) }
     }
-    private(set) var logLines: [LogLine] = []
     private(set) var startedAt: Date?
     private(set) var detectedVersion: String?
     private(set) var localConfig: LocalThaneConfig = .defaults
@@ -100,12 +103,31 @@ final class BinaryManager {
         }
     }
 
+    private(set) var processStats = ProcessStats()
+    private(set) var recentCrashCount = 0
+
+    var healthStatus: HealthStatus {
+        switch state {
+        case .running:
+            if recentCrashCount >= 2 { return .degraded }
+            return .healthy
+        case .crashed:
+            if recentCrashCount >= 3 { return .crashLoop }
+            return .degraded
+        case .starting:
+            return recentCrashCount >= 3 ? .crashLoop : .healthy
+        case .stopped, .notConfigured:
+            return .stopped
+        }
+    }
+
     private var process: Process?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
     private var restartTask: Task<Void, Never>?
+    private var statsTask: Task<Void, Never>?
     private var restartAttempt = 0
-    private let maxLogLines = 500
+    private var recentCrashTimestamps: [Date] = []
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "binary")
 
     /// Whether the server should be running. Persisted across launches.
@@ -185,8 +207,8 @@ final class BinaryManager {
 
         shouldRun = true
         state = .starting
-        logLines.removeAll()
         detectedVersion = nil
+        lastCPUSample = nil
         localConfig = Self.parseConfig(at: configURL ?? workspaceURL.appending(path: "config.yaml"))
 
         let proc = Process()
@@ -227,6 +249,7 @@ final class BinaryManager {
             startedAt = Date()
             restartAttempt = 0
             state = .running(pid: proc.processIdentifier)
+            startStatsPolling(pid: proc.processIdentifier)
             append("thane started (pid \(proc.processIdentifier))", isError: false)
             logger.info("thane started, pid \(proc.processIdentifier)")
         } catch {
@@ -243,10 +266,6 @@ final class BinaryManager {
         guard state.isRunning else { return }
         process?.terminate()
         // State update happens in terminationHandler.
-    }
-
-    func clearLog() {
-        logLines.removeAll()
     }
 
     func restart() {
@@ -266,6 +285,10 @@ final class BinaryManager {
     // MARK: - Private
 
     private func handleTermination(code: Int32) {
+        statsTask?.cancel()
+        statsTask = nil
+        processStats = ProcessStats()
+
         stdoutPipe?.fileHandleForReading.readabilityHandler = nil
         stderrPipe?.fileHandleForReading.readabilityHandler = nil
         stdoutPipe = nil
@@ -275,9 +298,15 @@ final class BinaryManager {
 
         let clean = (code == 0 || code == SIGTERM)
         if clean {
+            recentCrashTimestamps.removeAll()
+            recentCrashCount = 0
             state = .stopped
             append("thane stopped", isError: false)
         } else {
+            recentCrashTimestamps.append(Date())
+            let cutoff = Date().addingTimeInterval(-300) // 5-minute window
+            recentCrashTimestamps = recentCrashTimestamps.filter { $0 > cutoff }
+            recentCrashCount = recentCrashTimestamps.count
             state = .crashed(code: code)
             append("thane exited with code \(code)", isError: true)
             logger.error("thane crashed, exit code \(code)")
@@ -304,32 +333,29 @@ final class BinaryManager {
     }
 
     private func append(_ text: String, isError: Bool) {
-        let lines = text
-            .components(separatedBy: .newlines)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty }
-        let new: [LogLine] = lines.map { line in
-            let parsed = parseJSONLine(line)
-            if detectedVersion == nil, let v = parsed?.version { detectedVersion = v }
-            return LogLine(timestamp: Date(), text: line, isError: isError, level: parsed?.level)
-        }
-        logLines.append(contentsOf: new)
-        if logLines.count > maxLogLines {
-            logLines.removeFirst(logLines.count - maxLogLines)
+        for line in text.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.isEmpty else { continue }
+            if isError {
+                logger.error("\(trimmed, privacy: .public)")
+            } else {
+                logger.info("\(trimmed, privacy: .public)")
+            }
+            if detectedVersion == nil, let parsed = parseJSONLine(trimmed) {
+                detectedVersion = parsed.version
+            }
         }
     }
 
-    private struct ParsedLine { let version: String?; let level: String? }
+    private struct ParsedLine { let version: String? }
 
     private func parseJSONLine(_ line: String) -> ParsedLine? {
         guard line.hasPrefix("{"),
               let data = line.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let version = obj["thane_version"] as? String
         else { return nil }
-        return ParsedLine(
-            version: obj["thane_version"] as? String,
-            level: (obj["level"] as? String)?.uppercased()
-        )
+        return ParsedLine(version: version)
     }
 
     private func refreshState() {
@@ -339,6 +365,53 @@ final class BinaryManager {
         } else {
             state = .notConfigured
         }
+    }
+
+    // MARK: - Stats Polling
+
+    private func startStatsPolling(pid: Int32) {
+        statsTask?.cancel()
+        statsTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.collectStats(pid: pid)
+                do { try await Task.sleep(for: .seconds(3)) } catch { break }
+            }
+        }
+    }
+
+    nonisolated private func readProcessStats(pid: Int32) -> ProcessStats? {
+        var info = proc_taskinfo()
+        let size = Int32(MemoryLayout<proc_taskinfo>.size)
+        let result = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &info, size)
+        guard result == size else { return nil }
+
+        let residentMB = Double(info.pti_resident_size) / (1024 * 1024)
+        let totalTimeNS = info.pti_total_user + info.pti_total_system
+        let threads = Int(info.pti_threadnum)
+
+        return ProcessStats(
+            cpuPercent: Double(totalTimeNS),  // raw nanoseconds, we diff below
+            residentMemoryMB: residentMB,
+            threadCount: threads
+        )
+    }
+
+    private var lastCPUSample: (time: Date, ns: Double)?
+
+    private func collectStats(pid: Int32) {
+        guard let raw = readProcessStats(pid: pid) else { return }
+
+        var stats = raw
+        let now = Date()
+        if let last = lastCPUSample {
+            let wallElapsed = now.timeIntervalSince(last.time)
+            if wallElapsed > 0 {
+                let cpuDeltaNS = raw.cpuPercent - last.ns
+                stats.cpuPercent = (cpuDeltaNS / (wallElapsed * 1_000_000_000)) * 100
+            }
+        }
+        lastCPUSample = (time: now, ns: raw.cpuPercent)
+        processStats = stats
     }
 
     // MARK: - Config Parsing

@@ -37,11 +37,11 @@ struct ThaneApp: App {
                 .modelContainer(Self.modelContainer)
         }
 
-        Window("Console", id: "console") {
-            ConsoleView()
+        Window("Process Health", id: "process-health") {
+            ProcessHealthView()
                 .environment(appState)
         }
-        .defaultSize(width: 660, height: 420)
+        .defaultSize(width: 400, height: 300)
         .windowResizability(.contentMinSize)
 
         Window("Dashboard", id: "dashboard") {

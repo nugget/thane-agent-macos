@@ -29,7 +29,7 @@ struct MainView: View {
         .frame(minWidth: 700, minHeight: 500)
         .onAppear {
             // Register openWindow with AppState so AppKit contexts (dock menu, etc.) can use it.
-            appState.openConsoleWindow = { openWindow(id: "console") }
+            appState.openConsoleWindow = { openWindow(id: "process-health") }
             appState.openDashboardWindow = { openWindow(id: "dashboard") }
             // Auto-reconnect to the default remote server if one is configured and
             // we aren't already connected (e.g. local binary didn't beat us to it).
