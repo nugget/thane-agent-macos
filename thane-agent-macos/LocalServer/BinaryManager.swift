@@ -140,15 +140,16 @@ final class BinaryManager {
 
     // MARK: - Discovery
 
-    /// Canonical location for managed installs (future: downloaded from GitHub).
-    static var applicationSupportURL: URL {
-        URL.applicationSupportDirectory.appending(components: "Thane", "thane")
+    /// Canonical managed install location, matching the .pkg installer
+    /// and the default ~/Thane/ workspace.
+    static var managedBinaryURL: URL {
+        URL.homeDirectory.appending(components: "Thane", "bin", "thane")
     }
 
     /// Ordered list of paths to probe during auto-discovery.
     static var searchPaths: [URL] {
         [
-            applicationSupportURL,
+            managedBinaryURL,
             URL(fileURLWithPath: "/usr/local/bin/thane"),
             URL(fileURLWithPath: "/opt/homebrew/bin/thane"),
             URL(fileURLWithPath: ("~/.local/bin/thane" as NSString).expandingTildeInPath),

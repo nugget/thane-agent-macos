@@ -108,9 +108,9 @@ final class UpdateManager {
     private static let checkIntervalSeconds: TimeInterval = 86400 // 24 hours
 
     #if arch(arm64)
-    private static let platformSuffix = "darwin_arm64.zip"
+    private static let platformSuffix = "darwin_arm64.pkg"
     #elseif arch(x86_64)
-    private static let platformSuffix = "darwin_amd64.zip"
+    private static let platformSuffix = "darwin_amd64.pkg"
     #endif
 
     init() {
@@ -266,10 +266,9 @@ final class UpdateManager {
 
         defer { try? fm.removeItem(at: tempDir) }
 
-        // Extract with ditto
-        let extractDir = tempDir.appending(component: "extracted")
-        try fm.createDirectory(at: extractDir, withIntermediateDirectories: true)
-        try await extractArchive(archivePath: archivePath, destination: extractDir)
+        // Extract pkg payload
+        let extractDir = tempDir.appending(component: "expanded")
+        try await expandPackage(pkgPath: archivePath, destination: extractDir)
         try Task.checkCancellation()
 
         // Locate binary
@@ -279,7 +278,7 @@ final class UpdateManager {
 
         // Install
         state = .installing
-        let installURL = BinaryManager.applicationSupportURL
+        let installURL = BinaryManager.managedBinaryURL
         let installDir = installURL.deletingLastPathComponent()
         let backupURL = installURL.appendingPathExtension("backup")
 
@@ -347,10 +346,10 @@ final class UpdateManager {
         return nil
     }
 
-    private func extractArchive(archivePath: URL, destination: URL) async throws {
+    private func expandPackage(pkgPath: URL, destination: URL) async throws {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/bin/ditto")
-        proc.arguments = ["-xk", archivePath.path, destination.path]
+        proc.executableURL = URL(fileURLWithPath: "/usr/sbin/pkgutil")
+        proc.arguments = ["--expand-full", pkgPath.path, destination.path]
 
         let errPipe = Pipe()
         proc.standardError = errPipe
@@ -365,17 +364,35 @@ final class UpdateManager {
         }
     }
 
-    private func findBinary(in directory: URL) -> URL? {
+    private func findBinary(in expandedPkg: URL) -> URL? {
         let fm = FileManager.default
-        // Check top level
-        let topLevel = directory.appending(component: "thane")
-        if fm.fileExists(atPath: topLevel.path) { return topLevel }
 
-        // Check one level deep
-        guard let contents = try? fm.contentsOfDirectory(atPath: directory.path) else { return nil }
-        for entry in contents {
-            let nested = directory.appending(components: entry, "thane")
-            if fm.fileExists(atPath: nested.path) { return nested }
+        // Expected layout from the thane .pkg:
+        // <expanded>/thane-component.pkg/Payload/Thane/bin/thane
+        let expected = expandedPkg.appending(
+            components: "thane-component.pkg", "Payload", "Thane", "bin", "thane"
+        )
+        if fm.fileExists(atPath: expected.path) { return expected }
+
+        // Fallback: search Payload directories for a file named "thane"
+        guard let contents = try? fm.contentsOfDirectory(atPath: expandedPkg.path) else { return nil }
+        for entry in contents where entry.hasSuffix(".pkg") {
+            let payload = expandedPkg.appending(components: entry, "Payload")
+            if let found = findExecutable(named: "thane", under: payload) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    private func findExecutable(named name: String, under directory: URL) -> URL? {
+        guard let enumerator = FileManager.default.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+        for case let url as URL in enumerator where url.lastPathComponent == name {
+            return url
         }
         return nil
     }
@@ -533,7 +550,7 @@ private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
         // The file at `location` is deleted after this method returns,
         // so copy it to a stable temp path before resuming the continuation.
         let dest = FileManager.default.temporaryDirectory
-            .appending(component: "thane-download-\(UUID().uuidString).zip")
+            .appending(component: "thane-download-\(UUID().uuidString).pkg")
         do {
             try FileManager.default.copyItem(at: location, to: dest)
             tempCopy = dest
