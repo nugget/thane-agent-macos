@@ -101,6 +101,7 @@ final class UpdateManager {
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "update")
     private var periodicCheckTask: Task<Void, Never>?
     private var downloadTask: Task<Void, Never>?
+    private var activeDownloadTask: URLSessionDownloadTask?
 
     private static let repoOwner = "nugget"
     private static let repoName = "thane-ai-agent"
@@ -187,6 +188,8 @@ final class UpdateManager {
     }
 
     func cancelDownload() {
+        activeDownloadTask?.cancel()
+        activeDownloadTask = nil
         downloadTask?.cancel()
         downloadTask = nil
         if let release = availableRelease {
@@ -227,9 +230,17 @@ final class UpdateManager {
         state = .downloading(progress: 0)
         let fm = FileManager.default
 
-        // Download archive
-        let (archiveData, archiveFilename) = try await downloadWithProgress(url: release.assetURL)
+        // Download archive to temp file with progress tracking
+        let archiveFilename = release.assetURL.lastPathComponent
+        let tempFileURL = try await downloadFile(from: release.assetURL)
+        activeDownloadTask = nil
         try Task.checkCancellation()
+
+        // Move to a location we control (system may clean the original)
+        let tempDir = fm.temporaryDirectory.appending(component: "thane-update-\(UUID().uuidString)")
+        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let archivePath = tempDir.appending(component: archiveFilename)
+        try fm.moveItem(at: tempFileURL, to: archivePath)
 
         // Download checksums
         state = .verifying
@@ -244,18 +255,14 @@ final class UpdateManager {
         guard let expectedHash else {
             throw UpdateError.checksumNotFound(filename: archiveFilename)
         }
+        let archiveData = try Data(contentsOf: archivePath)
         let actualHash = SHA256.hash(data: archiveData).map { String(format: "%02x", $0) }.joined()
         guard actualHash == expectedHash else {
             logger.error("SHA-256 mismatch: expected \(expectedHash), got \(actualHash)")
+            try? fm.removeItem(at: tempDir)
             throw UpdateError.checksumMismatch
         }
         logger.info("SHA-256 verified for \(archiveFilename)")
-
-        // Write archive to temp
-        let tempDir = fm.temporaryDirectory.appending(component: "thane-update-\(UUID().uuidString)")
-        try fm.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        let archivePath = tempDir.appending(component: archiveFilename)
-        try archiveData.write(to: archivePath)
 
         defer { try? fm.removeItem(at: tempDir) }
 
@@ -312,26 +319,20 @@ final class UpdateManager {
         logger.info("Updated to \(release.version)")
     }
 
-    private func downloadWithProgress(url: URL) async throws -> (Data, String) {
-        let (asyncBytes, response) = try await URLSession.shared.bytes(from: url)
-        let expectedLength = (response as? HTTPURLResponse)
-            .flatMap { Int($0.expectedContentLength) } ?? 0
-        let filename = url.lastPathComponent
-
-        var data = Data()
-        if expectedLength > 0 { data.reserveCapacity(expectedLength) }
-        var received = 0
-
-        for try await byte in asyncBytes {
-            data.append(byte)
-            received += 1
-            if expectedLength > 0 && received % 65536 == 0 {
-                let progress = Double(received) / Double(expectedLength)
-                state = .downloading(progress: min(progress, 1.0))
+    private func downloadFile(from url: URL) async throws -> URL {
+        let delegate = DownloadDelegate { [weak self] fraction in
+            Task { @MainActor [weak self] in
+                self?.state = .downloading(progress: fraction)
             }
         }
 
-        return (data, filename)
+        return try await withCheckedThrowingContinuation { continuation in
+            let task = URLSession.shared.downloadTask(with: url)
+            delegate.continuation = continuation
+            task.delegate = delegate
+            self.activeDownloadTask = task
+            task.resume()
+        }
     }
 
     private func parseChecksum(text: String, filename: String) -> String? {
@@ -496,5 +497,64 @@ enum UpdateError: LocalizedError {
         case .noReleasesFound:
             return "No releases found"
         }
+    }
+}
+
+// MARK: - Download Delegate
+
+/// Bridges URLSessionDownloadTask delegate callbacks to a CheckedContinuation,
+/// providing progress updates and a cancellable task handle.
+private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
+    private let onProgress: @Sendable (Double) -> Void
+    var continuation: CheckedContinuation<URL, Error>?
+    private var tempCopy: URL?
+
+    init(onProgress: @escaping @Sendable (Double) -> Void) {
+        self.onProgress = onProgress
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        guard totalBytesExpectedToWrite > 0 else { return }
+        let fraction = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
+        onProgress(min(fraction, 1.0))
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        // The file at `location` is deleted after this method returns,
+        // so copy it to a stable temp path before resuming the continuation.
+        let dest = FileManager.default.temporaryDirectory
+            .appending(component: "thane-download-\(UUID().uuidString).zip")
+        do {
+            try FileManager.default.copyItem(at: location, to: dest)
+            tempCopy = dest
+        } catch {
+            continuation?.resume(throwing: error)
+            continuation = nil
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        didCompleteWithError error: Error?
+    ) {
+        if let error {
+            continuation?.resume(throwing: error)
+        } else if let tempCopy {
+            continuation?.resume(returning: tempCopy)
+        } else {
+            continuation?.resume(throwing: UpdateError.binaryNotFoundInArchive)
+        }
+        continuation = nil
     }
 }
