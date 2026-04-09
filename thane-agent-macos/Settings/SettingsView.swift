@@ -178,10 +178,10 @@ struct LocalServerSettingsView: View {
 
                 HStack {
                     Spacer()
-                    Button("Open Console") {
-                        openWindow(id: "console")
+                    Button("Process Health") {
+                        openWindow(id: "process-health")
                     }
-                    .disabled(manager.logLines.isEmpty && !manager.state.isRunning)
+                    .disabled(!manager.state.isRunning && manager.state != .stopped)
                 }
             }
         }
