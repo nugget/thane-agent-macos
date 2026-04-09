@@ -84,6 +84,7 @@ final class BinaryManager {
         didSet {
             UserDefaults.standard.set(binaryURL?.path, forKey: "binaryPath")
             refreshState()
+            Task { await refreshCodeSignature() }
         }
     }
 
@@ -103,6 +104,7 @@ final class BinaryManager {
         }
     }
 
+    private(set) var codeSignature: AppleCodeSignature?
     private(set) var processStats = ProcessStats()
     private(set) var recentCrashCount = 0
 
@@ -171,6 +173,7 @@ final class BinaryManager {
             configURL = URL(fileURLWithPath: path)
         }
         refreshState()
+        Task { await refreshCodeSignature() }
     }
 
     // MARK: - Lifecycle
@@ -278,6 +281,40 @@ final class BinaryManager {
                 start()
             }
         } else {
+            start()
+        }
+    }
+
+    // MARK: - Code Signature
+
+    func refreshCodeSignature() async {
+        guard let url = binaryURL else {
+            codeSignature = nil
+            return
+        }
+        let result = await BinaryPedigreeInspector.inspect(binaryURL: url)
+        codeSignature = result.apple
+    }
+
+    // MARK: - Maintenance
+
+    /// Stop the binary, perform an action (e.g. replacing the executable), then
+    /// restart if it was previously running. Used by UpdateManager for updates.
+    func performMaintenance(_ action: @Sendable () throws -> Void) async throws {
+        let wasRunning = state.isRunning
+        let previousShouldRun = shouldRun
+        if wasRunning { stop() }
+
+        // Wait for process to exit
+        var waitIterations = 0
+        while state.isRunning && waitIterations < 50 {
+            try await Task.sleep(for: .milliseconds(100))
+            waitIterations += 1
+        }
+
+        try action()
+
+        if previousShouldRun {
             start()
         }
     }

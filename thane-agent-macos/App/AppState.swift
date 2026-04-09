@@ -10,6 +10,7 @@ final class AppState {
     let connection = ServerConnection()
     let platformRouter = PlatformServiceRouter()
     let binaryManager = BinaryManager()
+    let updateManager = UpdateManager()
     let permissionsManager = PermissionsManager()
     let calendarService = CalendarService()
 
@@ -108,6 +109,15 @@ final class AppState {
         }
 
         binaryManager.autoStartIfNeeded()
+
+        updateManager.startPeriodicChecks { [weak self] in
+            self?.binaryManager.detectedVersion
+        }
+    }
+
+    var updateAvailable: Bool {
+        if case .available = updateManager.state { return true }
+        return false
     }
 
     /// Connect to a remote server using the given config and stored token.

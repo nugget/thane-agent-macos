@@ -184,6 +184,14 @@ struct LocalServerSettingsView: View {
                     .disabled(!manager.state.isRunning && manager.state != .stopped)
                 }
             }
+
+            Section("Updates") {
+                UpdateSettingsSection()
+            }
+
+            Section("Code Signature") {
+                CodeSignatureSection()
+            }
         }
         .formStyle(.grouped)
         .padding()

@@ -32,6 +32,12 @@ struct MenuBarView: View {
                 }
             }
 
+            if appState.updateAvailable {
+                Button("Update Available...") {
+                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                }
+            }
+
             Divider()
 
             SettingsLink {

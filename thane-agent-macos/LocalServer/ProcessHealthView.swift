@@ -44,6 +44,17 @@ struct ProcessHealthView: View {
                                 .padding(.vertical, 1)
                                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 3))
                         }
+                        if case .available(let newVersion) = appState.updateManager.state,
+                           let release = appState.updateManager.availableRelease {
+                            Link(destination: release.htmlURL) {
+                                Text("v\(newVersion) available")
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(.blue, in: RoundedRectangle(cornerRadius: 3))
+                            }
+                        }
                     }
                 }
             }
@@ -108,6 +119,17 @@ struct ProcessHealthView: View {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.yellow)
                     Text("\(manager.recentCrashCount) crash\(manager.recentCrashCount == 1 ? "" : "es") in the last 5 minutes")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if let sig = manager.codeSignature {
+                HStack(spacing: 6) {
+                    Image(systemName: sig.isVerified ? "checkmark.seal.fill" : "xmark.seal")
+                        .foregroundStyle(sig.isVerified ? .green : .secondary)
+                    Text(sig.summary)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

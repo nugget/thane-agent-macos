@@ -42,10 +42,12 @@ git config --local gpg.ssh.program ssh-keygen
 ## Architecture
 
 - **ThaneApp.swift** — App entry, window definitions (Main, MenuBar, Settings, Process Health, Dashboard)
-- **AppState.swift** — Central `@Observable` coordinator; owns `ServerConnection`, `BinaryManager`, `PlatformServiceRouter`
-- **BinaryManager.swift** — Local `thane` process lifecycle, health monitoring, config parsing
+- **AppState.swift** — Central `@Observable` coordinator; owns `ServerConnection`, `BinaryManager`, `UpdateManager`, `PlatformServiceRouter`
+- **BinaryManager.swift** — Local `thane` process lifecycle, health monitoring, config parsing, code signature inspection
+- **UpdateManager.swift** — GitHub release checking, binary download/verify/install with SHA-256 + CryptoKit
+- **CodeSignatureInfo.swift** — `BinaryPedigree` protocol, `AppleCodeSignature` (Security.framework), `ThaneEmbeddedPedigree` (future x509)
 - **ServerConnection.swift** — WebSocket client with auth handshake and platform request routing
-- **ProcessHealthView.swift** — Live process health status and resource stats
+- **ProcessHealthView.swift** — Live process health status, resource stats, code signature summary
 - Data models use SwiftData (`ServerConfig`, `Conversation`, `ChatMessage`)
 
 ## Conventions
