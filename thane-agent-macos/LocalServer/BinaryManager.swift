@@ -70,6 +70,17 @@ final class BinaryManager {
         var threadCount: Int = 0
     }
 
+    /// How the managed binary was installed. Determines what trust signals
+    /// are meaningful to display — a bare CLI binary cannot carry a stapled
+    /// notarization ticket, so package-level notarization is tracked here.
+    enum InstallProvenance: String {
+        case unknown            // binary was found on disk, no install history
+        case notarizedPackage   // installed from a notarized .pkg
+        case signedPackage      // installed from a signed but not notarized .pkg
+        case unsignedPackage    // installed from an unsigned .pkg
+        case manual             // filesystem watcher detected an external change
+    }
+
     // MARK: - Properties
 
     private(set) var state: State = .notConfigured {
@@ -87,6 +98,8 @@ final class BinaryManager {
         didSet {
             UserDefaults.standard.set(binaryURL?.path, forKey: "binaryPath")
             binarySignatureMismatch = false
+            // Don't reset provenance if UpdateManager just set binaryURL —
+            // it calls setInstallProvenance() immediately after.
             refreshState()
             Task { await refreshCodeSignature() }
             startWatchingBinary()
@@ -110,6 +123,12 @@ final class BinaryManager {
     }
 
     private(set) var codeSignature: AppleCodeSignature?
+
+    /// How the current binary was installed. Persisted so it survives app restarts.
+    private(set) var installProvenance: InstallProvenance {
+        didSet { UserDefaults.standard.set(installProvenance.rawValue, forKey: "installProvenance") }
+    }
+
     private(set) var processStats = ProcessStats()
     private(set) var recentCrashCount = 0
 
@@ -173,6 +192,8 @@ final class BinaryManager {
     // MARK: - Init
 
     init() {
+        installProvenance = UserDefaults.standard.string(forKey: "installProvenance")
+            .flatMap { InstallProvenance(rawValue: $0) } ?? .unknown
         // Restore previously saved path, or auto-discover.
         if let path = UserDefaults.standard.string(forKey: "binaryPath") {
             binaryURL = URL(fileURLWithPath: path)
@@ -326,6 +347,12 @@ final class BinaryManager {
         }
     }
 
+    /// Record how the binary was installed. Called by UpdateManager after
+    /// verifying the installer package.
+    func setInstallProvenance(_ provenance: InstallProvenance) {
+        installProvenance = provenance
+    }
+
     // MARK: - Maintenance
 
     /// Stop the binary, perform an action (e.g. replacing the executable), then
@@ -395,8 +422,11 @@ final class BinaryManager {
         let previousTeamID = codeSignature?.teamID
         let newSignature = await AppleCodeSignature.inspect(binaryURL: url)
 
-        // Always update the displayed signature
+        // Always update the displayed signature and invalidate stale
+        // package provenance — the binary on disk is no longer the one
+        // we installed, regardless of whether the new one is trusted.
         codeSignature = newSignature
+        installProvenance = .manual
 
         // Determine trust: same Team ID means this is a legitimate update
         let trusted: Bool

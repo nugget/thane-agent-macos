@@ -266,6 +266,18 @@ final class UpdateManager {
 
         defer { try? fm.removeItem(at: tempDir) }
 
+        // Verify package signature and record provenance
+        let pkgSignature = await PackageSignatureInfo.inspect(pkgURL: archivePath)
+        let provenance: BinaryManager.InstallProvenance
+        if pkgSignature.isNotarized {
+            provenance = .notarizedPackage
+        } else if pkgSignature.isSigned {
+            provenance = .signedPackage
+        } else {
+            provenance = .unsignedPackage
+        }
+        logger.info("Package provenance: \(provenance.rawValue) (\(pkgSignature.summary))")
+
         // Extract pkg payload
         let extractDir = tempDir.appending(component: "expanded")
         try await expandPackage(pkgPath: archivePath, destination: extractDir)
@@ -310,6 +322,7 @@ final class UpdateManager {
         }
 
         binaryManager.binaryURL = installURL
+        binaryManager.setInstallProvenance(provenance)
 
         // Clean up backup
         try? fm.removeItem(at: backupURL)

@@ -3,14 +3,15 @@ import Security
 
 // MARK: - Apple Code Signature
 
-/// Inspects and surfaces macOS code signature details for a binary.
+/// Inspects macOS code signature details for a binary using Security.framework.
 ///
-/// Uses Security.framework (`SecStaticCode`) and `spctl` to extract
-/// Team ID, signing identity, notarization status, and certificate chain.
+/// This reports the binary's own code signature — Team ID, signing identity,
+/// and certificate chain. It does **not** check notarization: Apple does not
+/// support stapling notarization tickets to standalone CLI binaries. Package-
+/// level notarization is tracked separately via install provenance.
 struct AppleCodeSignature: Sendable {
 
     enum Status: Sendable, Equatable {
-        case notarized(teamID: String, identity: String)
         case signed(teamID: String, identity: String)
         case adhoc
         case unsigned
@@ -20,15 +21,12 @@ struct AppleCodeSignature: Sendable {
     let status: Status
     let teamID: String?
     let signingIdentity: String?
-    let isNotarized: Bool
     let certificateChain: [String]
 
     var summary: String {
         switch status {
-        case .notarized(let team, _):
-            return "Notarized \u{2014} Developer ID (\(team))"
         case .signed(let team, _):
-            return "Signed \u{2014} Developer ID (\(team))"
+            return "Developer ID signed (\(team))"
         case .adhoc:
             return "Ad-hoc signed (no identity)"
         case .unsigned:
@@ -39,10 +37,8 @@ struct AppleCodeSignature: Sendable {
     }
 
     var isVerified: Bool {
-        switch status {
-        case .notarized, .signed: true
-        default: false
-        }
+        if case .signed = status { return true }
+        return false
     }
 
     var details: [(label: String, value: String)] {
@@ -53,7 +49,6 @@ struct AppleCodeSignature: Sendable {
         if let identity = signingIdentity {
             rows.append(("Signing Identity", identity))
         }
-        rows.append(("Notarized", isNotarized ? "Yes" : "No"))
         for (i, cn) in certificateChain.enumerated() {
             let label = i == 0 ? "Leaf Certificate" : "Certificate [\(i)]"
             rows.append((label, cn))
@@ -63,9 +58,8 @@ struct AppleCodeSignature: Sendable {
 
     // MARK: - Inspection
 
-    /// Inspect the Apple code signature on a binary at the given URL.
-    /// Runs Security.framework calls and an `spctl` subprocess off the
-    /// main actor.
+    /// Inspect the Apple code signature on a binary. Checks the code signature
+    /// only — not notarization, which is a package-level property.
     nonisolated static func inspect(binaryURL: URL) async -> AppleCodeSignature {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -85,7 +79,7 @@ struct AppleCodeSignature: Sendable {
         guard createStatus == errSecSuccess, let code = staticCode else {
             return AppleCodeSignature(
                 status: .error("Failed to create static code object (OSStatus \(createStatus))"),
-                teamID: nil, signingIdentity: nil, isNotarized: false, certificateChain: []
+                teamID: nil, signingIdentity: nil, certificateChain: []
             )
         }
 
@@ -93,13 +87,13 @@ struct AppleCodeSignature: Sendable {
         if validityStatus == errSecCSUnsigned {
             return AppleCodeSignature(
                 status: .unsigned,
-                teamID: nil, signingIdentity: nil, isNotarized: false, certificateChain: []
+                teamID: nil, signingIdentity: nil, certificateChain: []
             )
         }
         if validityStatus != errSecSuccess {
             return AppleCodeSignature(
                 status: .error("Signature validation failed (OSStatus \(validityStatus))"),
-                teamID: nil, signingIdentity: nil, isNotarized: false, certificateChain: []
+                teamID: nil, signingIdentity: nil, certificateChain: []
             )
         }
 
@@ -113,7 +107,7 @@ struct AppleCodeSignature: Sendable {
         guard infoStatus == errSecSuccess, let info = infoRef as? [String: Any] else {
             return AppleCodeSignature(
                 status: .error("Failed to read signing information"),
-                teamID: nil, signingIdentity: nil, isNotarized: false, certificateChain: []
+                teamID: nil, signingIdentity: nil, certificateChain: []
             )
         }
 
@@ -133,17 +127,12 @@ struct AppleCodeSignature: Sendable {
         if team == nil && chain.isEmpty {
             return AppleCodeSignature(
                 status: .adhoc,
-                teamID: nil, signingIdentity: identity, isNotarized: false, certificateChain: []
+                teamID: nil, signingIdentity: identity, certificateChain: []
             )
         }
 
-        // Check notarization via spctl
-        let notarized = checkNotarization(binaryURL: binaryURL)
-
         let status: Status
-        if notarized, let team, let identity {
-            status = .notarized(teamID: team, identity: identity)
-        } else if let team, let identity {
+        if let team, let identity {
             status = .signed(teamID: team, identity: identity)
         } else if let team {
             status = .signed(teamID: team, identity: identity ?? "Unknown")
@@ -155,15 +144,45 @@ struct AppleCodeSignature: Sendable {
             status: status,
             teamID: team,
             signingIdentity: identity,
-            isNotarized: notarized,
             certificateChain: chain
         )
     }
+}
 
-    nonisolated private static func checkNotarization(binaryURL: URL) -> Bool {
+// MARK: - Package Signature
+
+/// Checks the signing and notarization status of a .pkg installer package
+/// using `pkgutil --check-signature`.
+struct PackageSignatureInfo: Sendable {
+    let isSigned: Bool
+    let signingTeamID: String?
+    let isNotarized: Bool
+    let rawOutput: String
+
+    var summary: String {
+        if isNotarized {
+            return "Notarized package"
+        } else if isSigned {
+            return "Signed package"
+        } else {
+            return "Unsigned package"
+        }
+    }
+
+    /// Check the signature and notarization status of a .pkg file.
+    nonisolated static func inspect(pkgURL: URL) async -> PackageSignatureInfo {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let result = inspectSync(pkgURL: pkgURL)
+                continuation.resume(returning: result)
+            }
+        }
+    }
+
+    nonisolated private static func inspectSync(pkgURL: URL) -> PackageSignatureInfo {
         let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/usr/sbin/spctl")
-        proc.arguments = ["-a", "-t", "exec", "-vvv", binaryURL.path]
+        proc.executableURL = URL(fileURLWithPath: "/usr/sbin/pkgutil")
+        proc.arguments = ["--check-signature", pkgURL.path]
 
         let pipe = Pipe()
         proc.standardOutput = pipe
@@ -173,14 +192,30 @@ struct AppleCodeSignature: Sendable {
             try proc.run()
             proc.waitUntilExit()
         } catch {
-            return false
+            return PackageSignatureInfo(
+                isSigned: false, signingTeamID: nil,
+                isNotarized: false, rawOutput: error.localizedDescription
+            )
         }
 
-        guard let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) else {
-            return false
+        let output = String(
+            data: pipe.fileHandleForReading.readDataToEndOfFile(),
+            encoding: .utf8
+        ) ?? ""
+
+        let isSigned = output.contains("Developer ID Installer")
+        let isNotarized = output.contains("notarized")
+
+        // Extract team ID from output like "(XXXXXXXXXX)"
+        var teamID: String?
+        if let range = output.range(of: #"\([A-Z0-9]{10}\)"#, options: .regularExpression) {
+            let match = output[range]
+            teamID = String(match.dropFirst().dropLast())
         }
 
-        // spctl output includes "Notarized Developer ID" for notarized binaries
-        return output.contains("Notarized Developer ID")
+        return PackageSignatureInfo(
+            isSigned: isSigned, signingTeamID: teamID,
+            isNotarized: isNotarized, rawOutput: output
+        )
     }
 }

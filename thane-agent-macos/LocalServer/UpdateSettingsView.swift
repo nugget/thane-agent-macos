@@ -172,6 +172,7 @@ struct CodeSignatureSection: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else if let sig = manager.codeSignature {
+            // Binary code signature
             HStack(spacing: 6) {
                 Image(systemName: sig.isVerified ? "checkmark.seal.fill" : "xmark.seal")
                     .foregroundStyle(sig.isVerified ? .green : .secondary)
@@ -183,6 +184,9 @@ struct CodeSignatureSection: View {
                 LabeledContent(detail.label, value: detail.value)
                     .font(.caption)
             }
+
+            // Install provenance
+            provenanceRow
 
             HStack {
                 Spacer()
@@ -199,6 +203,32 @@ struct CodeSignatureSection: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+        }
+    }
+
+    @ViewBuilder
+    private var provenanceRow: some View {
+        let provenance = manager.installProvenance
+        switch provenance {
+        case .notarizedPackage:
+            LabeledContent("Installer Package", value: "Notarized")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .signedPackage:
+            LabeledContent("Installer Package", value: "Signed")
+                .font(.caption)
+        case .unsignedPackage:
+            LabeledContent("Installer Package", value: "Unsigned")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .manual:
+            LabeledContent("Install Source", value: "External update")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .unknown:
+            LabeledContent("Install Source", value: "Unknown")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
     }
 }
