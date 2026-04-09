@@ -6,12 +6,15 @@ import os
 ///
 /// Lifecycle: find → start → running → stop/crash → stopped
 ///
-/// The canonical install location is ~/Library/Application Support/Thane/thane.
-/// For development, we also probe common PATH locations. Users can always
-/// point us at an arbitrary path via the Settings UI.
+/// The canonical managed install location is ~/Thane/bin/thane, matching
+/// the .pkg installer and the default workspace. For development, we also
+/// probe common PATH locations. Users can always point us at an arbitrary
+/// path via the Settings UI.
 ///
-/// Future: download/update from GitHub release assets, auto-restart on crash,
-/// SMAppService for Login Item integration.
+/// When the binary on disk changes (e.g. via `deploy-macos-pkg` or manual
+/// copy), a filesystem watcher re-inspects the code signature. If the new
+/// binary is signed by the same Team ID, the process is restarted
+/// automatically. Signature mismatches are surfaced without restarting.
 /// Subset of thane's config.yaml relevant to the macOS app.
 /// Parsed on a best-effort basis — always falls back to defaults.
 struct LocalThaneConfig {
@@ -83,8 +86,10 @@ final class BinaryManager {
     var binaryURL: URL? {
         didSet {
             UserDefaults.standard.set(binaryURL?.path, forKey: "binaryPath")
+            binarySignatureMismatch = false
             refreshState()
             Task { await refreshCodeSignature() }
+            startWatchingBinary()
         }
     }
 
@@ -123,11 +128,17 @@ final class BinaryManager {
         }
     }
 
+    /// True when the last filesystem change produced a signature mismatch.
+    /// Surfaced in the UI so the user knows the binary on disk isn't trusted.
+    private(set) var binarySignatureMismatch = false
+
     private var process: Process?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
     private var restartTask: Task<Void, Never>?
     private var statsTask: Task<Void, Never>?
+    private var binaryWatchSource: (any DispatchSourceFileSystemObject)?
+    private var binaryWatchDebounce: Task<Void, Never>?
     private var restartAttempt = 0
     private var recentCrashTimestamps: [Date] = []
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "binary")
@@ -175,6 +186,7 @@ final class BinaryManager {
         }
         refreshState()
         Task { await refreshCodeSignature() }
+        startWatchingBinary()
     }
 
     // MARK: - Lifecycle
@@ -316,6 +328,104 @@ final class BinaryManager {
 
         if previousShouldRun {
             start()
+        }
+    }
+
+    // MARK: - Binary Filesystem Watch
+
+    /// Watch the binary's parent directory for changes. When the binary is
+    /// replaced on disk (e.g. by `installer -pkg` or manual copy), we
+    /// re-inspect the code signature and decide whether to auto-restart.
+    private func startWatchingBinary() {
+        stopWatchingBinary()
+        guard let url = binaryURL else { return }
+
+        // Watch the parent directory — the file itself may be replaced
+        // atomically (delete + rename), which invalidates a file descriptor
+        // on the original inode.
+        let dirURL = url.deletingLastPathComponent()
+        let dirPath = dirURL.path
+
+        guard FileManager.default.fileExists(atPath: dirPath) else { return }
+
+        let fd = open(dirPath, O_EVTONLY)
+        guard fd >= 0 else {
+            logger.warning("Cannot open \(dirPath) for filesystem monitoring")
+            return
+        }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .rename, .delete],
+            queue: .global(qos: .utility)
+        )
+        source.setEventHandler { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.handleBinaryDirectoryChange()
+            }
+        }
+        source.setCancelHandler {
+            close(fd)
+        }
+        source.resume()
+        binaryWatchSource = source
+        logger.info("Watching \(dirPath) for binary changes")
+    }
+
+    private func stopWatchingBinary() {
+        binaryWatchSource?.cancel()
+        binaryWatchSource = nil
+        binaryWatchDebounce?.cancel()
+        binaryWatchDebounce = nil
+    }
+
+    /// Debounce filesystem events — `installer -pkg` can trigger several
+    /// writes in quick succession. Wait for events to settle before acting.
+    private func handleBinaryDirectoryChange() {
+        binaryWatchDebounce?.cancel()
+        binaryWatchDebounce = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            await self?.evaluateBinaryChange()
+        }
+    }
+
+    private func evaluateBinaryChange() async {
+        guard let url = binaryURL else { return }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            logger.info("Binary no longer exists at \(url.path)")
+            return
+        }
+
+        let previousTeamID = codeSignature?.teamID
+        let newSignature = await AppleCodeSignature.inspect(binaryURL: url)
+
+        // Always update the displayed signature
+        codeSignature = newSignature
+
+        // Determine trust: same Team ID means this is a legitimate update
+        let trusted: Bool
+        if let previousTeam = previousTeamID, let newTeam = newSignature.teamID {
+            trusted = previousTeam == newTeam
+        } else if previousTeamID == nil && newSignature.teamID != nil {
+            // Upgrading from unsigned to signed — trust it
+            trusted = true
+        } else if previousTeamID == nil && newSignature.teamID == nil {
+            // Both unsigned — could be dev builds, allow it
+            trusted = true
+        } else {
+            // Had a team ID, now doesn't — suspicious
+            trusted = false
+        }
+
+        if trusted {
+            binarySignatureMismatch = false
+            logger.info("Binary changed on disk with trusted signature, restarting")
+            if state.isRunning {
+                restart()
+            }
+        } else {
+            binarySignatureMismatch = true
+            logger.warning("Binary changed on disk with mismatched signature (was: \(previousTeamID ?? "nil"), now: \(newSignature.teamID ?? "nil")) — not restarting")
         }
     }
 

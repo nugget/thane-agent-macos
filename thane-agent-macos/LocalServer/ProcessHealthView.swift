@@ -114,6 +114,17 @@ struct ProcessHealthView: View {
                 )
             }
 
+            if manager.binarySignatureMismatch {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.shield.fill")
+                        .foregroundStyle(.red)
+                    Text("Binary on disk has a different code signature — not auto-restarting")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             if manager.recentCrashCount > 0 {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")
