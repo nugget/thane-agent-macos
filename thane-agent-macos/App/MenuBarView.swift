@@ -40,6 +40,10 @@ struct MenuBarView: View {
 
             Divider()
 
+            Button("About Thane") {
+                openWindow(id: "about")
+            }
+
             SettingsLink {
                 Text("Settings...")
             }

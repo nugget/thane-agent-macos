@@ -1,12 +1,9 @@
 set dotenv-load
 
-app           := "thane-agent-macos"
-build-dir     := "build"
-
-# Site-specific — set in .env (see .env.example)
-deploy-host    := env("DEPLOY_HOST", "")
-deploy-path    := env("DEPLOY_PATH", "/Applications")
+app            := "thane-agent-macos"
+build-dir      := "build"
 notary-profile := env("NOTARYTOOL_PROFILE", "notarytool")
+deploy-path    := env("DEPLOY_PATH", "/Applications")
 
 export DEVELOPER_DIR := env("DEVELOPER_DIR", "/Applications/Xcode.app/Contents/Developer")
 
@@ -62,7 +59,7 @@ ci: build test
 # --- Release ---
 
 # Notarize and staple the exported .app (runs export first)
-[group('release')]
+[group('release-engineering')]
 notarize: export
     ditto -c -k --keepParent \
         {{build-dir}}/export/{{app}}.app \
@@ -73,11 +70,12 @@ notarize: export
     xcrun stapler staple {{build-dir}}/export/{{app}}.app
     @echo "Notarized and stapled."
 
-# Deploy notarized .app to pocket (runs full notarize pipeline first)
-[group('release')]
-deploy: notarize
+# Deploy notarized .app to a remote macOS host via rsync
+[doc("Operator path: build, notarize, and deploy the companion app to a remote host")]
+[group('deploy')]
+deploy-agent-macos host deploy_path=deploy-path: notarize
     rsync -av --delete \
         {{build-dir}}/export/{{app}}.app \
-        {{deploy-host}}:{{deploy-path}}/
-    @echo "Deployed to {{deploy-host}}:{{deploy-path}}/{{app}}.app"
-    @echo "Restart the app on {{deploy-host}} to pick up the new build."
+        {{host}}:{{deploy_path}}/
+    @echo "Deployed to {{host}}:{{deploy_path}}/{{app}}.app"
+    @echo "Restart the app on {{host}} to pick up the new build."

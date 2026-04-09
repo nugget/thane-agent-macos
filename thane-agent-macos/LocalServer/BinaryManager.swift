@@ -132,6 +132,9 @@ final class BinaryManager {
     /// Surfaced in the UI so the user knows the binary on disk isn't trusted.
     private(set) var binarySignatureMismatch = false
 
+    /// True when the running binary's major version doesn't match the app's.
+    private(set) var versionIncompatible = false
+
     private var process: Process?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
@@ -308,6 +311,21 @@ final class BinaryManager {
         codeSignature = await AppleCodeSignature.inspect(binaryURL: url)
     }
 
+    // MARK: - Version Compatibility
+
+    private func checkVersionCompatibility() {
+        guard let detected = detectedVersion,
+              let binarySemver = SemanticVersion(detected),
+              let appSemver = AppVersion.semver else {
+            versionIncompatible = false
+            return
+        }
+        versionIncompatible = binarySemver.major != appSemver.major
+        if versionIncompatible {
+            logger.warning("Binary version \(detected) has different major version than app \(AppVersion.current)")
+        }
+    }
+
     // MARK: - Maintenance
 
     /// Stop the binary, perform an action (e.g. replacing the executable), then
@@ -468,6 +486,7 @@ final class BinaryManager {
             }
             if detectedVersion == nil, let parsed = parseJSONLine(trimmed) {
                 detectedVersion = parsed.version
+                checkVersionCompatibility()
             }
         }
     }

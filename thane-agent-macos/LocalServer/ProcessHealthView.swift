@@ -114,6 +114,17 @@ struct ProcessHealthView: View {
                 )
             }
 
+            if manager.versionIncompatible {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("Binary major version does not match Thane for macOS \(AppVersion.current)")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
             if manager.binarySignatureMismatch {
                 HStack(spacing: 6) {
                     Image(systemName: "exclamationmark.shield.fill")
