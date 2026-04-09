@@ -359,9 +359,13 @@ final class BinaryManager {
             eventMask: [.write, .rename, .delete],
             queue: .global(qos: .utility)
         )
-        source.setEventHandler { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.handleBinaryDirectoryChange()
+
+        // Capture a nonisolated reference to avoid accessing @MainActor
+        // state from the GCD callback queue. The Task hops to MainActor.
+        let weakSelf = WeakSendableRef(self)
+        source.setEventHandler {
+            Task { @MainActor in
+                weakSelf.value?.handleBinaryDirectoryChange()
             }
         }
         source.setCancelHandler {
@@ -624,4 +628,15 @@ final class BinaryManager {
         }
         return value.isEmpty ? nil : value
     }
+}
+
+// MARK: - Weak Sendable Reference
+
+/// A `Sendable` wrapper around a weak reference to a `@MainActor`-isolated
+/// object. Allows GCD callbacks (which fire on arbitrary queues) to capture
+/// a reference without triggering actor-isolation checks at the capture site.
+/// The caller must hop to the main actor before accessing `.value`.
+private final class WeakSendableRef<T: AnyObject>: @unchecked Sendable {
+    weak var value: T?
+    init(_ value: T) { self.value = value }
 }
