@@ -74,8 +74,22 @@ notarize: export
 [doc("Operator path: build, notarize, and deploy the companion app to a remote host")]
 [group('deploy')]
 deploy-agent-macos host deploy_path=deploy-path: notarize
+    #!/usr/bin/env bash
+    set -euo pipefail
+    host="{{host}}"
+    app="{{app}}"
+    deploy_path="{{deploy_path}}"
+    build_dir="{{build-dir}}"
+
+    echo "Stopping ${app} on ${host}..."
+    ssh "$host" "pkill -x '${app}' 2>/dev/null || true"
+    sleep 2
+
     rsync -av --delete \
-        {{build-dir}}/export/{{app}}.app \
-        {{host}}:{{deploy_path}}/
-    @echo "Deployed to {{host}}:{{deploy_path}}/{{app}}.app"
-    @echo "Restart the app on {{host}} to pick up the new build."
+        "${build_dir}/export/${app}.app" \
+        "${host}:${deploy_path}/"
+    echo "Deployed to ${host}:${deploy_path}/${app}.app"
+
+    echo "Starting ${app} on ${host}..."
+    ssh "$host" "open '${deploy_path}/${app}.app'"
+    echo "Done."
