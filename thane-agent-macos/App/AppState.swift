@@ -17,8 +17,6 @@ final class AppState {
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "app")
     private(set) var calendarAuthorization: CalendarAuthorizationState = .notDetermined
 
-    /// Non-nil when the connected server has an incompatible major version.
-    private(set) var versionMismatch: String?
 
     var connectionState: ServerConnection.State {
         connection.state
@@ -95,10 +93,6 @@ final class AppState {
             return await platformRouter.handle(request: request)
         }
 
-        connection.onConnected = { [weak self] in
-            self?.checkServerVersionCompatibility()
-        }
-
         binaryManager.onStateChange = { [weak self] state in
             guard let self else { return }
             switch state {
@@ -126,28 +120,6 @@ final class AppState {
     var updateAvailable: Bool {
         if case .available = updateManager.state { return true }
         return false
-    }
-
-    // MARK: - Version Compatibility
-
-    /// Check that the connected server's major version matches ours.
-    /// Disconnects with a user-facing message if incompatible.
-    private func checkServerVersionCompatibility() {
-        guard let serverVersionString = connection.serverVersion,
-              let serverSemver = SemanticVersion(serverVersionString),
-              let appSemver = AppVersion.semver else {
-            versionMismatch = nil
-            return
-        }
-
-        if serverSemver.major != appSemver.major {
-            let message = "Server version \(serverSemver) is incompatible with Thane for macOS \(appSemver) (major version mismatch)"
-            versionMismatch = message
-            logger.warning("\(message)")
-            disconnect()
-        } else {
-            versionMismatch = nil
-        }
     }
 
     /// Connect to a remote server using the given config and stored token.

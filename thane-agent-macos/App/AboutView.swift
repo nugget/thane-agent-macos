@@ -31,11 +31,11 @@ struct AboutView: View {
 
             // Runtime versions
             VStack(spacing: 6) {
-                if let serverVersion = appState.connection.serverVersion {
-                    LabeledContent("Server", value: serverVersion)
-                }
                 if let binaryVersion = manager.detectedVersion {
                     LabeledContent("Local Binary", value: binaryVersion)
+                }
+                if let serverVersion = appState.connection.serverVersion {
+                    LabeledContent("Protocol", value: serverVersion)
                 }
                 if appState.connection.serverVersion == nil && manager.detectedVersion == nil {
                     Text("Not connected")
@@ -49,10 +49,10 @@ struct AboutView: View {
 
             // Links
             VStack(spacing: 4) {
-                Link("thane-agent-macos on GitHub",
-                     destination: URL(string: "https://github.com/nugget/thane-agent-macos")!)
-                Link("thane-ai-agent on GitHub",
-                     destination: URL(string: "https://github.com/nugget/thane-ai-agent")!)
+                aboutLink("thane-agent-macos on GitHub",
+                          url: "https://github.com/nugget/thane-agent-macos")
+                aboutLink("thane-ai-agent on GitHub",
+                          url: "https://github.com/nugget/thane-ai-agent")
             }
             .font(.caption)
 
@@ -62,5 +62,12 @@ struct AboutView: View {
         }
         .padding(24)
         .frame(width: 300)
+    }
+
+    private func aboutLink(_ title: String, url: String) -> some View {
+        Link(title, destination: URL(string: url)!)
+            .onHover { inside in
+                if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+            }
     }
 }

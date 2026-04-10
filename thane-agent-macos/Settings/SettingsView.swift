@@ -86,11 +86,6 @@ struct ServerSettingsView: View {
                         .font(.caption)
                 }
 
-                if let mismatch = appState.versionMismatch {
-                    Text(mismatch)
-                        .foregroundStyle(.orange)
-                        .font(.caption)
-                }
 
                 if let providerID = appState.connection.providerID {
                     LabeledContent("Provider ID", value: providerID)
