@@ -339,9 +339,13 @@ final class UpdateManager {
         }
 
         return try await withCheckedThrowingContinuation { continuation in
-            let task = URLSession.shared.downloadTask(with: url)
             delegate.continuation = continuation
-            task.delegate = delegate
+            let session = URLSession(
+                configuration: .default,
+                delegate: delegate,
+                delegateQueue: nil
+            )
+            let task = session.downloadTask(with: url)
             self.activeDownloadTask = task
             task.resume()
         }
@@ -416,6 +420,7 @@ final class UpdateManager {
         let tagName: String
         let htmlUrl: String
         let body: String?
+        let draft: Bool
         let prerelease: Bool
         let publishedAt: String
         let assets: [GitHubAsset]
@@ -443,6 +448,7 @@ final class UpdateManager {
             case tagName = "tag_name"
             case htmlUrl = "html_url"
             case body
+            case draft
             case prerelease
             case publishedAt = "published_at"
             case assets
@@ -486,7 +492,7 @@ final class UpdateManager {
         let decoder = JSONDecoder()
         if includePreReleases {
             let releases = try decoder.decode([GitHubReleaseResponse].self, from: data)
-            guard let first = releases.first else {
+            guard let first = releases.first(where: { !$0.draft }) else {
                 throw UpdateError.noReleasesFound
             }
             return first
@@ -532,12 +538,14 @@ enum UpdateError: LocalizedError {
 
 // MARK: - Download Delegate
 
-/// Bridges URLSessionDownloadTask delegate callbacks to a CheckedContinuation,
-/// providing progress updates and a cancellable task handle.
+/// Bridges URLSessionDownloadTask delegate callbacks to a CheckedContinuation.
+/// Must be used as the delegate of a dedicated URLSession (not URLSession.shared)
+/// because per-task delegates are not supported on download tasks.
 private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
     private let onProgress: @Sendable (Double) -> Void
     var continuation: CheckedContinuation<URL, Error>?
     private var tempCopy: URL?
+    private var hasResumed = false
 
     init(onProgress: @escaping @Sendable (Double) -> Void) {
         self.onProgress = onProgress
@@ -568,6 +576,8 @@ private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
             try FileManager.default.copyItem(at: location, to: dest)
             tempCopy = dest
         } catch {
+            guard !hasResumed else { return }
+            hasResumed = true
             continuation?.resume(throwing: error)
             continuation = nil
         }
@@ -578,6 +588,8 @@ private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
         task: URLSessionTask,
         didCompleteWithError error: Error?
     ) {
+        guard !hasResumed else { return }
+        hasResumed = true
         if let error {
             continuation?.resume(throwing: error)
         } else if let tempCopy {
@@ -586,5 +598,6 @@ private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
             continuation?.resume(throwing: UpdateError.binaryNotFoundInArchive)
         }
         continuation = nil
+        session.finishTasksAndInvalidate()
     }
 }

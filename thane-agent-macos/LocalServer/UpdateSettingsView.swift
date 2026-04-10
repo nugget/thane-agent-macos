@@ -25,7 +25,7 @@ struct UpdateSettingsSection: View {
             Spacer()
 
             if let date = manager.lastCheckDate {
-                Text("Last checked \(date, style: .relative) ago")
+                Text("Last checked \(date, style: .relative)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

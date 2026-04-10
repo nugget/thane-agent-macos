@@ -20,7 +20,9 @@ struct AppleCodeSignature: Sendable {
 
     let status: Status
     let teamID: String?
-    let signingIdentity: String?
+    /// Code signing identifier (typically a bundle-style identifier like
+    /// "info.nugget.thane"), not the human-readable signing identity name.
+    let identifier: String?
     let certificateChain: [String]
 
     var summary: String {
@@ -46,8 +48,8 @@ struct AppleCodeSignature: Sendable {
         if let team = teamID {
             rows.append(("Team ID", team))
         }
-        if let identity = signingIdentity {
-            rows.append(("Signing Identity", identity))
+        if let id = identifier {
+            rows.append(("Identifier", id))
         }
         for (i, cn) in certificateChain.enumerated() {
             let label = i == 0 ? "Leaf Certificate" : "Certificate [\(i)]"
@@ -79,7 +81,7 @@ struct AppleCodeSignature: Sendable {
         guard createStatus == errSecSuccess, let code = staticCode else {
             return AppleCodeSignature(
                 status: .error("Failed to create static code object (OSStatus \(createStatus))"),
-                teamID: nil, signingIdentity: nil, certificateChain: []
+                teamID: nil, identifier: nil, certificateChain: []
             )
         }
 
@@ -87,13 +89,13 @@ struct AppleCodeSignature: Sendable {
         if validityStatus == errSecCSUnsigned {
             return AppleCodeSignature(
                 status: .unsigned,
-                teamID: nil, signingIdentity: nil, certificateChain: []
+                teamID: nil, identifier: nil, certificateChain: []
             )
         }
         if validityStatus != errSecSuccess {
             return AppleCodeSignature(
                 status: .error("Signature validation failed (OSStatus \(validityStatus))"),
-                teamID: nil, signingIdentity: nil, certificateChain: []
+                teamID: nil, identifier: nil, certificateChain: []
             )
         }
 
@@ -107,7 +109,7 @@ struct AppleCodeSignature: Sendable {
         guard infoStatus == errSecSuccess, let info = infoRef as? [String: Any] else {
             return AppleCodeSignature(
                 status: .error("Failed to read signing information"),
-                teamID: nil, signingIdentity: nil, certificateChain: []
+                teamID: nil, identifier: nil, certificateChain: []
             )
         }
 
@@ -127,7 +129,7 @@ struct AppleCodeSignature: Sendable {
         if team == nil && chain.isEmpty {
             return AppleCodeSignature(
                 status: .adhoc,
-                teamID: nil, signingIdentity: identity, certificateChain: []
+                teamID: nil, identifier: identity, certificateChain: []
             )
         }
 
@@ -143,7 +145,7 @@ struct AppleCodeSignature: Sendable {
         return AppleCodeSignature(
             status: status,
             teamID: team,
-            signingIdentity: identity,
+            identifier: identity,
             certificateChain: chain
         )
     }

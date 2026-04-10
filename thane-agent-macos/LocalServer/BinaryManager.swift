@@ -11,10 +11,11 @@ import os
 /// probe common PATH locations. Users can always point us at an arbitrary
 /// path via the Settings UI.
 ///
-/// When the binary on disk changes (e.g. via `deploy-macos-pkg` or manual
-/// copy), a filesystem watcher re-inspects the code signature. If the new
-/// binary is signed by the same Team ID, the process is restarted
-/// automatically. Signature mismatches are surfaced without restarting.
+/// When the binary on disk changes (for example, after a package install,
+/// replacement, or manual copy), a filesystem watcher re-inspects the code
+/// signature. If the new binary is signed by the same Team ID, the process
+/// is restarted automatically. Signature mismatches are surfaced without
+/// restarting.
 /// Subset of thane's config.yaml relevant to the macOS app.
 /// Parsed on a best-effort basis — always falls back to defaults.
 struct LocalThaneConfig {
@@ -98,9 +99,11 @@ final class BinaryManager {
         didSet {
             UserDefaults.standard.set(binaryURL?.path, forKey: "binaryPath")
             binarySignatureMismatch = false
-            // Don't reset provenance if UpdateManager just set binaryURL —
-            // it calls setInstallProvenance() immediately after.
+            if !isPerformingMaintenance {
+                installProvenance = .unknown
+            }
             refreshState()
+            updateBinaryMtime()
             Task { await refreshCodeSignature() }
             startWatchingBinary()
         }
@@ -161,6 +164,8 @@ final class BinaryManager {
     private var statsTask: Task<Void, Never>?
     private var binaryWatcher: DirectoryWatcher?
     private var binaryWatchDebounce: Task<Void, Never>?
+    private var lastKnownBinaryMtime: Date?
+    private var isPerformingMaintenance = false
     private var restartAttempt = 0
     private var recentCrashTimestamps: [Date] = []
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "binary")
@@ -209,6 +214,7 @@ final class BinaryManager {
             configURL = URL(fileURLWithPath: path)
         }
         refreshState()
+        updateBinaryMtime()
         Task { await refreshCodeSignature() }
         startWatchingBinary()
     }
@@ -357,10 +363,14 @@ final class BinaryManager {
 
     /// Stop the binary, perform an action (e.g. replacing the executable), then
     /// restart if it was previously running. Used by UpdateManager for updates.
+    /// Suppresses the filesystem watcher during the operation so the managed
+    /// install doesn't race with watcher-triggered provenance resets.
     func performMaintenance(_ action: @Sendable () throws -> Void) async throws {
-        let wasRunning = state.isRunning
+        isPerformingMaintenance = true
+        defer { isPerformingMaintenance = false }
+
         let previousShouldRun = shouldRun
-        if wasRunning { stop() }
+        if state.isRunning { stop() }
 
         // Wait for process to exit
         var waitIterations = 0
@@ -370,6 +380,9 @@ final class BinaryManager {
         }
 
         try action()
+
+        // Update mtime so the watcher doesn't treat this as an external change
+        updateBinaryMtime()
 
         if previousShouldRun {
             start()
@@ -412,12 +425,25 @@ final class BinaryManager {
         }
     }
 
+    private func updateBinaryMtime() {
+        guard let url = binaryURL else { return }
+        lastKnownBinaryMtime = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    }
+
     private func evaluateBinaryChange() async {
+        guard !isPerformingMaintenance else { return }
         guard let url = binaryURL else { return }
         guard FileManager.default.fileExists(atPath: url.path) else {
             logger.info("Binary no longer exists at \(url.path)")
             return
         }
+
+        // Check if the binary itself actually changed (not just another file in the dir)
+        let currentMtime = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+        if let known = lastKnownBinaryMtime, let current = currentMtime, known == current {
+            return // Binary didn't change, some other file in the directory did
+        }
+        lastKnownBinaryMtime = currentMtime
 
         let previousTeamID = codeSignature?.teamID
         let newSignature = await AppleCodeSignature.inspect(binaryURL: url)
