@@ -21,7 +21,7 @@ struct AboutView: View {
                     .foregroundStyle(.secondary)
 
                 if let buildDate = AppVersion.buildDate {
-                    Text("Built \(buildDate, style: .date)")
+                    Text("Built \(buildDate, style: .date) (\(AppVersion.gitCommit))")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }

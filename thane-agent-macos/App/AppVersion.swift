@@ -14,12 +14,13 @@ enum AppVersion {
     /// Display string including build number, e.g. "0.0.2 (42)".
     static let displayVersion: String = "\(current) (\(build))"
 
-    /// When the current executable was built, derived from the binary's
-    /// modification timestamp. Useful for operators to anchor a build in
-    /// time without tracking release tags.
+    /// Git commit hash stamped at build time.
+    static let gitCommit: String = BuildInfo.gitCommit
+
+    /// When the binary was built, stamped at compile time by `just stamp`.
     static let buildDate: Date? = {
-        guard let execURL = Bundle.main.executableURL else { return nil }
-        return (try? FileManager.default.attributesOfItem(atPath: execURL.path))?[.modificationDate] as? Date
+        let formatter = ISO8601DateFormatter()
+        return formatter.date(from: BuildInfo.buildTimestamp)
     }()
 
     /// Parsed semantic version, if the marketing version is valid semver.
