@@ -3,7 +3,7 @@ set dotenv-load
 app            := "thane-agent-macos"
 build-dir      := "build"
 notary-profile := env("NOTARYTOOL_PROFILE", "notarytool")
-deploy-path    := env("DEPLOY_PATH", "/Applications")
+deploy-path    := env("DEPLOY_PATH", "Applications")
 
 export DEVELOPER_DIR := env("DEVELOPER_DIR", "/Applications/Xcode.app/Contents/Developer")
 
@@ -85,8 +85,8 @@ deploy-agent-macos host deploy_path=deploy-path: notarize
     ssh "$host" "pkill -x '${app}' 2>/dev/null || true"
     sleep 2
 
-    echo "Deploying to ${host}:${deploy_path}/${app}.app..."
-    ssh "$host" "rm -rf '${deploy_path}/${app}.app'"
+    echo "Deploying to ${host}:~/${deploy_path}/${app}.app..."
+    ssh "$host" "mkdir -p '${deploy_path}' && rm -rf '${deploy_path}/${app}.app'"
     rsync -av \
         "${build_dir}/export/${app}.app" \
         "${host}:${deploy_path}/"
