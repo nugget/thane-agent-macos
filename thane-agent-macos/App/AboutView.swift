@@ -19,6 +19,12 @@ struct AboutView: View {
                 Text("Version \(AppVersion.displayVersion)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+
+                if let buildDate = AppVersion.buildDate {
+                    Text("Built \(buildDate, style: .date)")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
 
             Divider()
