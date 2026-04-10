@@ -16,7 +16,7 @@ struct AboutView: View {
                 Text("Thane for macOS")
                     .font(.title.weight(.semibold))
 
-                Text("Version \(AppVersion.current)")
+                Text("Version \(AppVersion.displayVersion)")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }

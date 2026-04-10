@@ -18,10 +18,11 @@ default:
 build:
     xcodebuild -scheme {{app}} -destination 'platform=macOS' build
 
-# Archive for distribution
+# Archive for distribution (auto-increments build number)
 [group('build')]
 archive:
     rm -rf {{build-dir}}
+    agvtool next-version -all
     xcodebuild archive \
         -scheme {{app}} \
         -destination 'generic/platform=macOS' \
