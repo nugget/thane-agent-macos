@@ -25,6 +25,9 @@ final class ServerConnection {
     private(set) var serverVersion: String?
     private(set) var lastError: String?
 
+    /// Called after the connection is fully established and capabilities registered.
+    var onConnected: (() -> Void)?
+
     private var webSocketTask: URLSessionWebSocketTask?
     private var session: URLSession?
     private var nextID: Int64 = 1
@@ -173,6 +176,7 @@ final class ServerConnection {
             Task { @MainActor in
                 state = .connected
                 lastError = nil
+                onConnected?()
             }
             logger.info("Connected to server, provider ID: \(self.providerID ?? "unknown")")
 

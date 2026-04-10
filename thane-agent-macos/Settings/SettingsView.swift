@@ -86,6 +86,7 @@ struct ServerSettingsView: View {
                         .font(.caption)
                 }
 
+
                 if let providerID = appState.connection.providerID {
                     LabeledContent("Provider ID", value: providerID)
                         .font(.caption)
@@ -183,6 +184,14 @@ struct LocalServerSettingsView: View {
                     }
                     .disabled(!manager.state.isRunning && manager.state != .stopped)
                 }
+            }
+
+            Section("Updates") {
+                UpdateSettingsSection()
+            }
+
+            Section("Code Signature") {
+                CodeSignatureSection()
             }
         }
         .formStyle(.grouped)

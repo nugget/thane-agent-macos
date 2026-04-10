@@ -2,6 +2,9 @@
 build/
 .env
 
+# Generated at build time by `just stamp`
+thane-agent-macos/App/BuildInfo.swift
+
 # Xcode per-user state — never shared
 *.xcuserstate
 xcuserdata/

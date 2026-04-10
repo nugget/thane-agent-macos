@@ -32,7 +32,20 @@ struct MenuBarView: View {
                 }
             }
 
+            if appState.updateAvailable {
+                Button("Update Available...") {
+                    if #available(macOS 14, *) {
+                        NSApp.activate()
+                    }
+                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+                }
+            }
+
             Divider()
+
+            Button("About Thane") {
+                openWindow(id: "about")
+            }
 
             SettingsLink {
                 Text("Settings...")

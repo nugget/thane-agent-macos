@@ -6,12 +6,16 @@ import os
 ///
 /// Lifecycle: find → start → running → stop/crash → stopped
 ///
-/// The canonical install location is ~/Library/Application Support/Thane/thane.
-/// For development, we also probe common PATH locations. Users can always
-/// point us at an arbitrary path via the Settings UI.
+/// The canonical managed install location is ~/Thane/bin/thane, matching
+/// the .pkg installer and the default workspace. For development, we also
+/// probe common PATH locations. Users can always point us at an arbitrary
+/// path via the Settings UI.
 ///
-/// Future: download/update from GitHub release assets, auto-restart on crash,
-/// SMAppService for Login Item integration.
+/// When the binary on disk changes (for example, after a package install,
+/// replacement, or manual copy), a filesystem watcher re-inspects the code
+/// signature. If the new binary is signed by the same Team ID, the process
+/// is restarted automatically. Signature mismatches are surfaced without
+/// restarting.
 /// Subset of thane's config.yaml relevant to the macOS app.
 /// Parsed on a best-effort basis — always falls back to defaults.
 struct LocalThaneConfig {
@@ -67,6 +71,17 @@ final class BinaryManager {
         var threadCount: Int = 0
     }
 
+    /// How the managed binary was installed. Determines what trust signals
+    /// are meaningful to display — a bare CLI binary cannot carry a stapled
+    /// notarization ticket, so package-level notarization is tracked here.
+    enum InstallProvenance: String {
+        case unknown            // binary was found on disk, no install history
+        case notarizedPackage   // installed from a notarized .pkg
+        case signedPackage      // installed from a signed but not notarized .pkg
+        case unsignedPackage    // installed from an unsigned .pkg
+        case manual             // filesystem watcher detected an external change
+    }
+
     // MARK: - Properties
 
     private(set) var state: State = .notConfigured {
@@ -83,7 +98,14 @@ final class BinaryManager {
     var binaryURL: URL? {
         didSet {
             UserDefaults.standard.set(binaryURL?.path, forKey: "binaryPath")
+            binarySignatureMismatch = false
+            if !isPerformingMaintenance {
+                installProvenance = .unknown
+            }
             refreshState()
+            updateBinaryMtime()
+            Task { await refreshCodeSignature() }
+            startWatchingBinary()
         }
     }
 
@@ -101,6 +123,13 @@ final class BinaryManager {
         didSet {
             UserDefaults.standard.set(configURL?.path, forKey: "configPath")
         }
+    }
+
+    private(set) var codeSignature: AppleCodeSignature?
+
+    /// How the current binary was installed. Persisted so it survives app restarts.
+    private(set) var installProvenance: InstallProvenance {
+        didSet { UserDefaults.standard.set(installProvenance.rawValue, forKey: "installProvenance") }
     }
 
     private(set) var processStats = ProcessStats()
@@ -121,11 +150,22 @@ final class BinaryManager {
         }
     }
 
+    /// True when the last filesystem change produced a signature mismatch.
+    /// Surfaced in the UI so the user knows the binary on disk isn't trusted.
+    private(set) var binarySignatureMismatch = false
+
+    /// True when the running binary's major version doesn't match the app's.
+    private(set) var versionIncompatible = false
+
     private var process: Process?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
     private var restartTask: Task<Void, Never>?
     private var statsTask: Task<Void, Never>?
+    private var binaryWatcher: DirectoryWatcher?
+    private var binaryWatchDebounce: Task<Void, Never>?
+    private var lastKnownBinaryMtime: Date?
+    private var isPerformingMaintenance = false
     private var restartAttempt = 0
     private var recentCrashTimestamps: [Date] = []
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "binary")
@@ -138,15 +178,16 @@ final class BinaryManager {
 
     // MARK: - Discovery
 
-    /// Canonical location for managed installs (future: downloaded from GitHub).
-    static var applicationSupportURL: URL {
-        URL.applicationSupportDirectory.appending(components: "Thane", "thane")
+    /// Canonical managed install location, matching the .pkg installer
+    /// and the default ~/Thane/ workspace.
+    static var managedBinaryURL: URL {
+        URL.homeDirectory.appending(components: "Thane", "bin", "thane")
     }
 
     /// Ordered list of paths to probe during auto-discovery.
     static var searchPaths: [URL] {
         [
-            applicationSupportURL,
+            managedBinaryURL,
             URL(fileURLWithPath: "/usr/local/bin/thane"),
             URL(fileURLWithPath: "/opt/homebrew/bin/thane"),
             URL(fileURLWithPath: ("~/.local/bin/thane" as NSString).expandingTildeInPath),
@@ -156,6 +197,8 @@ final class BinaryManager {
     // MARK: - Init
 
     init() {
+        installProvenance = UserDefaults.standard.string(forKey: "installProvenance")
+            .flatMap { InstallProvenance(rawValue: $0) } ?? .unknown
         // Restore previously saved path, or auto-discover.
         if let path = UserDefaults.standard.string(forKey: "binaryPath") {
             binaryURL = URL(fileURLWithPath: path)
@@ -171,6 +214,9 @@ final class BinaryManager {
             configURL = URL(fileURLWithPath: path)
         }
         refreshState()
+        updateBinaryMtime()
+        Task { await refreshCodeSignature() }
+        startWatchingBinary()
     }
 
     // MARK: - Lifecycle
@@ -282,6 +328,159 @@ final class BinaryManager {
         }
     }
 
+    // MARK: - Code Signature
+
+    func refreshCodeSignature() async {
+        guard let url = binaryURL else {
+            codeSignature = nil
+            return
+        }
+        codeSignature = await AppleCodeSignature.inspect(binaryURL: url)
+    }
+
+    // MARK: - Version Compatibility
+
+    private func checkVersionCompatibility() {
+        guard let detected = detectedVersion,
+              let binarySemver = SemanticVersion(detected),
+              let appSemver = AppVersion.semver else {
+            versionIncompatible = false
+            return
+        }
+        versionIncompatible = binarySemver.major != appSemver.major
+        if versionIncompatible {
+            logger.warning("Binary version \(detected) has different major version than app \(AppVersion.current)")
+        }
+    }
+
+    /// Record how the binary was installed. Called by UpdateManager after
+    /// verifying the installer package.
+    func setInstallProvenance(_ provenance: InstallProvenance) {
+        installProvenance = provenance
+    }
+
+    // MARK: - Maintenance
+
+    /// Stop the binary, perform an action (e.g. replacing the executable), then
+    /// restart if it was previously running. Used by UpdateManager for updates.
+    /// Suppresses the filesystem watcher during the operation so the managed
+    /// install doesn't race with watcher-triggered provenance resets.
+    func performMaintenance(_ action: @Sendable () throws -> Void) async throws {
+        isPerformingMaintenance = true
+        defer { isPerformingMaintenance = false }
+
+        let previousShouldRun = shouldRun
+        if state.isRunning { stop() }
+
+        // Wait for process to exit
+        var waitIterations = 0
+        while state.isRunning && waitIterations < 50 {
+            try await Task.sleep(for: .milliseconds(100))
+            waitIterations += 1
+        }
+
+        try action()
+
+        // Update mtime so the watcher doesn't treat this as an external change
+        updateBinaryMtime()
+
+        if previousShouldRun {
+            start()
+        }
+    }
+
+    // MARK: - Binary Filesystem Watch
+
+    /// Watch the binary's parent directory for changes. When the binary is
+    /// replaced on disk (e.g. by `installer -pkg` or manual copy), we
+    /// re-inspect the code signature and decide whether to auto-restart.
+    private func startWatchingBinary() {
+        stopWatchingBinary()
+        guard let url = binaryURL else { return }
+
+        let dirPath = url.deletingLastPathComponent().path
+        guard FileManager.default.fileExists(atPath: dirPath) else { return }
+
+        binaryWatcher = DirectoryWatcher(path: dirPath) { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.handleBinaryDirectoryChange()
+            }
+        }
+        logger.info("Watching \(dirPath) for binary changes")
+    }
+
+    private func stopWatchingBinary() {
+        binaryWatcher = nil
+        binaryWatchDebounce?.cancel()
+        binaryWatchDebounce = nil
+    }
+
+    /// Debounce filesystem events — `installer -pkg` can trigger several
+    /// writes in quick succession. Wait for events to settle before acting.
+    private func handleBinaryDirectoryChange() {
+        binaryWatchDebounce?.cancel()
+        binaryWatchDebounce = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            await self?.evaluateBinaryChange()
+        }
+    }
+
+    private func updateBinaryMtime() {
+        guard let url = binaryURL else { return }
+        lastKnownBinaryMtime = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+    }
+
+    private func evaluateBinaryChange() async {
+        guard !isPerformingMaintenance else { return }
+        guard let url = binaryURL else { return }
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            logger.info("Binary no longer exists at \(url.path)")
+            return
+        }
+
+        // Check if the binary itself actually changed (not just another file in the dir)
+        let currentMtime = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.modificationDate] as? Date
+        if let known = lastKnownBinaryMtime, let current = currentMtime, known == current {
+            return // Binary didn't change, some other file in the directory did
+        }
+        lastKnownBinaryMtime = currentMtime
+
+        let previousTeamID = codeSignature?.teamID
+        let newSignature = await AppleCodeSignature.inspect(binaryURL: url)
+
+        // Always update the displayed signature and invalidate stale
+        // package provenance — the binary on disk is no longer the one
+        // we installed, regardless of whether the new one is trusted.
+        codeSignature = newSignature
+        installProvenance = .manual
+
+        // Determine trust: same Team ID means this is a legitimate update
+        let trusted: Bool
+        if let previousTeam = previousTeamID, let newTeam = newSignature.teamID {
+            trusted = previousTeam == newTeam
+        } else if previousTeamID == nil && newSignature.teamID != nil {
+            // Upgrading from unsigned to signed — trust it
+            trusted = true
+        } else if previousTeamID == nil && newSignature.teamID == nil {
+            // Both unsigned — could be dev builds, allow it
+            trusted = true
+        } else {
+            // Had a team ID, now doesn't — suspicious
+            trusted = false
+        }
+
+        if trusted {
+            binarySignatureMismatch = false
+            logger.info("Binary changed on disk with trusted signature, restarting")
+            if state.isRunning {
+                restart()
+            }
+        } else {
+            binarySignatureMismatch = true
+            logger.warning("Binary changed on disk with mismatched signature (was: \(previousTeamID ?? "nil"), now: \(newSignature.teamID ?? "nil")) — not restarting")
+        }
+    }
+
     // MARK: - Private
 
     private func handleTermination(code: Int32) {
@@ -343,6 +542,7 @@ final class BinaryManager {
             }
             if detectedVersion == nil, let parsed = parseJSONLine(trimmed) {
                 detectedVersion = parsed.version
+                checkVersionCompatibility()
             }
         }
     }
@@ -476,5 +676,36 @@ final class BinaryManager {
             value = String(value.dropFirst().dropLast())
         }
         return value.isEmpty ? nil : value
+    }
+}
+
+// MARK: - Directory Watcher
+
+/// Wraps a kqueue-based `DispatchSource` for filesystem monitoring.
+///
+/// Lives outside the `@MainActor` default isolation so that the GCD event
+/// handler runs cleanly on a utility queue without triggering
+/// `dispatch_assert_queue_fail`. The `onChange` callback is `@Sendable`
+/// and expected to hop to the main actor itself.
+nonisolated final class DirectoryWatcher: @unchecked Sendable {
+    private var source: (any DispatchSourceFileSystemObject)?
+
+    init(path: String, onChange: @escaping @Sendable () -> Void) {
+        let fd = open(path, O_EVTONLY)
+        guard fd >= 0 else { return }
+
+        let src = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: fd,
+            eventMask: [.write, .rename, .delete],
+            queue: .global(qos: .utility)
+        )
+        src.setEventHandler(handler: onChange)
+        src.setCancelHandler { close(fd) }
+        src.resume()
+        source = src
+    }
+
+    deinit {
+        source?.cancel()
     }
 }

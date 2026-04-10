@@ -10,11 +10,13 @@ final class AppState {
     let connection = ServerConnection()
     let platformRouter = PlatformServiceRouter()
     let binaryManager = BinaryManager()
+    let updateManager = UpdateManager()
     let permissionsManager = PermissionsManager()
     let calendarService = CalendarService()
 
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "app")
     private(set) var calendarAuthorization: CalendarAuthorizationState = .notDetermined
+
 
     var connectionState: ServerConnection.State {
         connection.state
@@ -57,6 +59,7 @@ final class AppState {
     /// Called by MainView on appear to bridge SwiftUI's openWindow action to AppKit contexts.
     var openConsoleWindow: (() -> Void)?
     var openDashboardWindow: (() -> Void)?
+    var openAboutWindow: (() -> Void)?
 
     /// Base URL of the currently active server — local takes priority over remote.
     /// Used by the dashboard window to load the web UI.
@@ -108,6 +111,15 @@ final class AppState {
         }
 
         binaryManager.autoStartIfNeeded()
+
+        updateManager.startPeriodicChecks { [weak self] in
+            self?.binaryManager.detectedVersion
+        }
+    }
+
+    var updateAvailable: Bool {
+        if case .available = updateManager.state { return true }
+        return false
     }
 
     /// Connect to a remote server using the given config and stored token.
