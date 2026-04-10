@@ -85,10 +85,12 @@ deploy-agent-macos host deploy_path=deploy-path: notarize
     ssh "$host" "pkill -x '${app}' 2>/dev/null || true"
     sleep 2
 
-    rsync -av --delete \
+    echo "Deploying to ${host}:${deploy_path}/${app}.app..."
+    ssh "$host" "rm -rf '${deploy_path}/${app}.app'"
+    rsync -av \
         "${build_dir}/export/${app}.app" \
         "${host}:${deploy_path}/"
-    echo "Deployed to ${host}:${deploy_path}/${app}.app"
+    echo "Deployed."
 
     echo "Starting ${app} on ${host}..."
     ssh "$host" "open '${deploy_path}/${app}.app'"
