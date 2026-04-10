@@ -16,12 +16,12 @@ struct AboutView: View {
                 Text("Thane for macOS")
                     .font(.title.weight(.semibold))
 
-                Text("Version \(AppVersion.displayVersion)")
-                    .font(.subheadline)
+                Text(AppVersion.current)
+                    .font(.subheadline.monospaced())
                     .foregroundStyle(.secondary)
 
                 if let buildDate = AppVersion.buildDate {
-                    Text("Built \(buildDate, style: .date) (\(AppVersion.gitCommit))")
+                    Text("Built \(buildDate, style: .date) by \(AppVersion.builtBy)")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                 }
