@@ -61,6 +61,7 @@ final class AppState {
     /// Called by MainView on appear to bridge SwiftUI's openWindow action to AppKit contexts.
     var openConsoleWindow: (() -> Void)?
     var openDashboardWindow: (() -> Void)?
+    var openAboutWindow: (() -> Void)?
 
     /// Base URL of the currently active server — local takes priority over remote.
     /// Used by the dashboard window to load the web UI.
