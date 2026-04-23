@@ -46,7 +46,30 @@ The platform-provider architecture (`PlatformServiceRouter`, `PlatformServicePro
 
 Download the latest signed `.dmg` from the [Releases page](https://github.com/nugget/thane-agent-macos/releases/latest) and drag the app into Applications.
 
-Point it at your running [Thane](https://github.com/nugget/thane-ai-agent) server in Settings → Connection, and it'll handle the `thane` binary on disk for you.
+After first launch, choose how you want to run Thane. Both modes share the same chat UI, menu bar, and platform-service bridge — the difference is only where the agent process lives.
+
+### Option 1: Connect to an existing Thane server
+
+If `thane` is already running on a home server, NAS, or any other host:
+
+1. Open **Settings → Remote**
+2. Enter the base URL (e.g. `https://thane.yourdomain.tld` or `http://thane-host.local:8080`) and an API token
+3. Click **Connect**
+
+The app becomes a chat client and registers this Mac as a platform provider over WebSocket, exposing native macOS frameworks back to the remote agent.
+
+### Option 2: Run Thane on this Mac
+
+If you want Thane to live on the same Mac as the companion app, let the app install and supervise the binary for you:
+
+1. Open **Settings → Local**
+2. The app auto-discovers `thane` in `~/Thane/bin/`, `/usr/local/bin/`, `/opt/homebrew/bin/`, and `~/.local/bin/`. If none is present, the **Binary Updates** section downloads a signed `.pkg` directly from the [thane-ai-agent releases](https://github.com/nugget/thane-ai-agent/releases) — SHA-256 checksum + pkg signature both verified before install
+3. Point **Workspace** at your Thane directory (defaults to `~/Thane/`, where the binary also looks for `config.yaml`) and drop in a `config.yaml` with your LLM provider + Home Assistant connection details
+4. Click **Start**
+
+Once running, **Process Health** shows live resource stats, code-signature provenance, and restart controls. **Binary Updates** pulls newer signed releases when they land on GitHub; the app atomically stops the process, swaps the binary, and restarts it.
+
+When a local Thane is running, the app auto-connects to `localhost` and prefers it over any remote URL you've configured — so you can keep a Remote entry as a fallback for when the local process is stopped.
 
 ## Build from source
 
