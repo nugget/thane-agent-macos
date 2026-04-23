@@ -23,9 +23,6 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer
-
       - name: Install just
         uses: extractions/setup-just@v4
 
