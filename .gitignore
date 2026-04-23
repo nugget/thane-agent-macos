@@ -2,6 +2,9 @@
 build/
 .env
 
+# Generated from THANE_CODESIGN_IDENTITY at export time
+ExportOptions.plist
+
 # Generated at build time by `just stamp`
 thane-agent-macos/App/BuildInfo.swift
 

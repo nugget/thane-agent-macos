@@ -1,9 +1,15 @@
 set dotenv-load
 
-app            := "thane-agent-macos"
-build-dir      := "build"
-notary-profile := env("NOTARYTOOL_PROFILE", "notarytool")
-deploy-path    := env("DEPLOY_PATH", "Applications")
+app               := "thane-agent-macos"
+build-dir         := "build"
+deploy-path       := env("DEPLOY_PATH", "Applications")
+
+# Release-engineering credentials — sourced from the environment. Names match
+# the thane-ai-agent release scripts so both projects can share one .env file.
+#   THANE_NOTARY_PROFILE    — keychain credential profile for `xcrun notarytool`
+#   THANE_CODESIGN_IDENTITY — Developer ID Application identity (from `security find-identity`)
+notary-profile    := env("THANE_NOTARY_PROFILE", env("NOTARYTOOL_PROFILE", ""))
+signing-identity  := env("THANE_CODESIGN_IDENTITY", "")
 
 export DEVELOPER_DIR := env("DEVELOPER_DIR", "/Applications/Xcode.app/Contents/Developer")
 
@@ -11,31 +17,74 @@ export DEVELOPER_DIR := env("DEVELOPER_DIR", "/Applications/Xcode.app/Contents/D
 default:
     @just --list
 
+# --- Version helpers ---
+
+# Print the marketing version derived from the nearest git tag.
+# Example: "0.1.0" (or "0.0.0" when no tag exists).
+[group('version')]
+marketing-version:
+    #!/usr/bin/env bash
+    tag="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
+    printf '%s\n' "${tag#v}"
+
+# Print the build number derived from the git commit count.
+[group('version')]
+build-number:
+    @git rev-list --count HEAD 2>/dev/null || echo 0
+
+# Print the full version string baked into the app (git describe + dirty flag).
+[group('version')]
+describe:
+    @git describe --tags --always --dirty 2>/dev/null || echo dev
+
 # --- Build ---
 
-# Build for local development
+# Build for local development. Honors CODE_SIGNING_ALLOWED=NO for CI/ad-hoc
+# environments without a Developer ID certificate in the keychain.
 [group('build')]
 build: stamp
-    xcodebuild -scheme {{app}} -destination 'platform=macOS' build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    marketing="$(just marketing-version)"
+    build_num="$(just build-number)"
+    args=(
+        -scheme "{{app}}"
+        -destination 'platform=macOS'
+        "MARKETING_VERSION=$marketing"
+        "CURRENT_PROJECT_VERSION=$build_num"
+    )
+    if [ "${CODE_SIGNING_ALLOWED:-YES}" = "NO" ]; then
+        args+=(
+            "CODE_SIGN_IDENTITY=-"
+            "CODE_SIGNING_REQUIRED=NO"
+            "CODE_SIGNING_ALLOWED=NO"
+        )
+    fi
+    xcodebuild "${args[@]}" build
 
-# Archive for distribution (auto-increments build number)
+# Archive for distribution. Version comes from the nearest git tag.
 [group('build')]
 archive: stamp
-    rm -rf {{build-dir}}
-    agvtool next-version -all
+    #!/usr/bin/env bash
+    set -euo pipefail
+    marketing="$(just marketing-version)"
+    build_num="$(just build-number)"
+    rm -rf "{{build-dir}}/{{app}}.xcarchive"
     xcodebuild archive \
         -scheme {{app}} \
         -destination 'generic/platform=macOS' \
-        -archivePath {{build-dir}}/{{app}}.xcarchive
+        -archivePath "{{build-dir}}/{{app}}.xcarchive" \
+        MARKETING_VERSION="$marketing" \
+        CURRENT_PROJECT_VERSION="$build_num"
 
-# Generate BuildInfo.swift with compile-time constants
+# Generate BuildInfo.swift with compile-time constants (git describe et al).
 [group('build')]
 [private]
 stamp:
     #!/usr/bin/env bash
     set -euo pipefail
     out="{{app}}/App/BuildInfo.swift"
-    version="$(git describe --tags --always --dirty 2>/dev/null || echo dev)"
+    version="$(just describe)"
     commit="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
     branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
     timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -51,28 +100,70 @@ stamp:
     }
     SWIFT
 
-# Export Developer ID-signed .app from archive
+# Export a Developer ID-signed .app from the archive. Generates an
+# ExportOptions plist from THANE_CODESIGN_IDENTITY so the team ID never
+# gets checked into the repo.
 [group('build')]
 export: archive
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{signing-identity}}" ]; then
+        echo "THANE_CODESIGN_IDENTITY is not set — required for signed exports." >&2
+        echo "Example: 'Developer ID Application: Your Name (TEAMID1234)'" >&2
+        exit 1
+    fi
+    team_id="$(printf '%s' "{{signing-identity}}" | sed -E 's/.*\(([A-Z0-9]+)\).*/\1/')"
+    if [ -z "$team_id" ] || [ "$team_id" = "{{signing-identity}}" ]; then
+        echo "Could not extract team ID from THANE_CODESIGN_IDENTITY." >&2
+        exit 1
+    fi
+    rm -rf "{{build-dir}}/export"
+    export_plist="{{build-dir}}/ExportOptions.plist"
+    mkdir -p "{{build-dir}}"
+    cat > "$export_plist" <<EOF
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+    <dict>
+        <key>method</key>
+        <string>developer-id</string>
+        <key>teamID</key>
+        <string>${team_id}</string>
+        <key>signingStyle</key>
+        <string>automatic</string>
+    </dict>
+    </plist>
+    EOF
     xcodebuild -exportArchive \
-        -archivePath {{build-dir}}/{{app}}.xcarchive \
-        -exportPath {{build-dir}}/export \
-        -exportOptionsPlist ExportOptions.plist
-    @echo "Exported: {{build-dir}}/export/{{app}}.app"
+        -archivePath "{{build-dir}}/{{app}}.xcarchive" \
+        -exportPath "{{build-dir}}/export" \
+        -exportOptionsPlist "$export_plist"
+    echo "Exported: {{build-dir}}/export/{{app}}.app"
 
 # Clean build artifacts
 [group('build')]
 clean:
-    rm -rf {{build-dir}}
+    rm -rf "{{build-dir}}"
 
 # --- Test ---
 
-# Build and run unit tests
+# Build and run unit tests. Same signing behavior as `just build`.
 [group('test')]
 test:
-    xcodebuild test \
-        -scheme {{app}} \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(
+        -scheme "{{app}}"
         -destination 'platform=macOS'
+    )
+    if [ "${CODE_SIGNING_ALLOWED:-YES}" = "NO" ]; then
+        args+=(
+            "CODE_SIGN_IDENTITY=-"
+            "CODE_SIGNING_REQUIRED=NO"
+            "CODE_SIGNING_ALLOWED=NO"
+        )
+    fi
+    xcodebuild "${args[@]}" test
 
 # --- CI ---
 
@@ -80,24 +171,179 @@ test:
 [group('ci')]
 ci: build test
 
-# --- Release ---
+# --- Release engineering ---
 
-# Notarize and staple the exported .app (runs export first)
+# Notarize and staple the exported .app. Uses a submission zip (Apple's
+# notarytool doesn't accept raw .app bundles).
 [group('release-engineering')]
-notarize: export
+notarize-app: export
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{notary-profile}}" ]; then
+        echo "THANE_NOTARY_PROFILE is not set — required for notarization." >&2
+        exit 1
+    fi
     ditto -c -k --keepParent \
-        {{build-dir}}/export/{{app}}.app \
-        {{build-dir}}/{{app}}-notarize.zip
-    xcrun notarytool submit {{build-dir}}/{{app}}-notarize.zip \
+        "{{build-dir}}/export/{{app}}.app" \
+        "{{build-dir}}/{{app}}-notarize.zip"
+    xcrun notarytool submit "{{build-dir}}/{{app}}-notarize.zip" \
         --keychain-profile "{{notary-profile}}" \
         --wait
-    xcrun stapler staple {{build-dir}}/export/{{app}}.app
-    @echo "Notarized and stapled."
+    xcrun stapler staple "{{build-dir}}/export/{{app}}.app"
+    echo "Notarized and stapled: {{build-dir}}/export/{{app}}.app"
+
+# Package the notarized .app into a signed, notarized, stapled DMG.
+[doc("Building block: produce a release-ready DMG from the notarized .app")]
+[group('release-engineering')]
+dmg: notarize-app
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="$(just marketing-version)"
+    dmg_path="$(scripts/build-dmg.sh \
+        "$version" \
+        "{{build-dir}}/export/{{app}}.app" \
+        "{{build-dir}}/release" \
+        "{{signing-identity}}")"
+    echo "Submitting DMG for notarization..."
+    xcrun notarytool submit "$dmg_path" \
+        --keychain-profile "{{notary-profile}}" \
+        --wait
+    xcrun stapler staple "$dmg_path"
+    echo "DMG ready: $dmg_path"
+
+# Write a SHA-256 checksums file next to the release artifacts.
+[doc("Building block: write {app}_{version}_checksums.txt alongside release assets")]
+[group('release-engineering')]
+checksums:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="$(just marketing-version)"
+    release_dir="{{build-dir}}/release"
+    if [ ! -d "$release_dir" ]; then
+        echo "No release directory at $release_dir — run 'just dmg' first" >&2
+        exit 1
+    fi
+    shopt -s nullglob
+    cd "$release_dir"
+    artifacts=("{{app}}_${version}".dmg)
+    if [ "${#artifacts[@]}" -eq 0 ]; then
+        echo "No release artifacts found in $release_dir" >&2
+        exit 1
+    fi
+    output="{{app}}_${version}_checksums.txt"
+    shasum -a 256 "${artifacts[@]}" > "$output"
+    echo "Wrote $release_dir/$output"
+    cat "$output"
+
+# Extract the CHANGELOG section for the current version.
+[group('release-engineering')]
+release-notes:
+    @scripts/release-notes.sh "$(just marketing-version)"
+
+# --- Release flow ---
+
+# Full release: verify, build, notarize, DMG, checksums, tag, GitHub release.
+# Requires a clean working tree and a CHANGELOG entry for VERSION.
+[doc("Cut a formal release for VERSION (e.g. 0.1.0). Tags, builds DMG, uploads to GitHub.")]
+[group('release-engineering')]
+release version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{version}}"
+    version="${version#v}"
+    tag="v${version}"
+
+    # Preflight: release-engineering env vars present.
+    if [ -z "{{signing-identity}}" ]; then
+        echo "THANE_CODESIGN_IDENTITY is not set — required for signed releases." >&2
+        exit 1
+    fi
+    if [ -z "{{notary-profile}}" ]; then
+        echo "THANE_NOTARY_PROFILE is not set — required for notarization." >&2
+        exit 1
+    fi
+
+    # Preflight: clean working tree.
+    if ! git diff --quiet HEAD -- || ! git diff --cached --quiet -- ; then
+        echo "Working tree has uncommitted changes — commit or stash before releasing." >&2
+        exit 1
+    fi
+
+    # Preflight: CHANGELOG entry exists.
+    if ! ./scripts/release-notes.sh "$version" >/dev/null 2>&1; then
+        echo "No CHANGELOG section for $version — add one before releasing." >&2
+        exit 1
+    fi
+
+    # Preflight: tag doesn't exist yet.
+    if git rev-parse "$tag" >/dev/null 2>&1; then
+        echo "Tag $tag already exists." >&2
+        exit 1
+    fi
+
+    # Preflight: on main.
+    branch="$(git rev-parse --abbrev-ref HEAD)"
+    if [ "$branch" != "main" ]; then
+        echo "Not on main (current: $branch) — releases ship from main." >&2
+        exit 1
+    fi
+
+    # Preflight: HEAD is already on origin/main. Releases don't push commits;
+    # everything must be merged via PR first.
+    git fetch --quiet origin main
+    if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+        echo "HEAD does not match origin/main — merge release commits via PR first." >&2
+        echo "  local  HEAD: $(git rev-parse --short HEAD)" >&2
+        echo "  origin/main: $(git rev-parse --short origin/main)" >&2
+        exit 1
+    fi
+
+    # Gate: full CI must pass.
+    echo "==> Running CI gate..."
+    just ci
+
+    # Tag before building so git describe bakes the tag into the artifact.
+    echo "==> Tagging $tag..."
+    git tag -s "$tag" -m "Release $tag"
+
+    # Build DMG (archive → export → notarize .app → DMG → sign → notarize → staple).
+    echo "==> Building notarized DMG..."
+    just dmg
+
+    # Checksums.
+    echo "==> Writing checksums..."
+    just checksums
+
+    # Push the tag only — commits must already be on origin/main.
+    echo "==> Pushing tag..."
+    git push origin "$tag"
+
+    # GitHub release with CHANGELOG notes + DMG + checksums.
+    release_dir="{{build-dir}}/release"
+    dmg_path="${release_dir}/{{app}}_${version}.dmg"
+    checksum_path="${release_dir}/{{app}}_${version}_checksums.txt"
+    notes_file="$(mktemp -t thane-release-notes)"
+    ./scripts/release-notes.sh "$version" > "$notes_file"
+
+    echo "==> Creating GitHub release..."
+    prerelease_flag=""
+    case "$version" in *-*) prerelease_flag="--prerelease" ;; esac
+    gh release create "$tag" \
+        --title "$tag" \
+        --notes-file "$notes_file" \
+        $prerelease_flag \
+        "$dmg_path" \
+        "$checksum_path"
+
+    rm -f "$notes_file"
+    echo "==> Released $tag"
+
+# --- Deploy ---
 
 # Deploy notarized .app to a remote macOS host via rsync
 [doc("Operator path: build, notarize, and deploy the companion app to a remote host")]
 [group('deploy')]
-deploy-agent-macos host deploy_path=deploy-path: notarize
+deploy-agent-macos host deploy_path=deploy-path: notarize-app
     #!/usr/bin/env bash
     set -euo pipefail
     host="{{host}}"

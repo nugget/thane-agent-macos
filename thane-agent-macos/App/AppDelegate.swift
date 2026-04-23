@@ -1,7 +1,10 @@
 import AppKit
 
 /// Handles AppKit delegate callbacks that have no SwiftUI equivalent.
-/// Injected via @NSApplicationDelegateAdaptor in ThaneApp.
+/// Injected via @NSApplicationDelegateAdaptor in ThaneApp. Marked @MainActor
+/// because all NSApplicationDelegate callbacks fire on the main thread and
+/// the class reaches into @MainActor AppState.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     var appState: AppState?
