@@ -334,7 +334,7 @@ final class UpdateManager {
     }
 
     private func downloadFile(from url: URL) async throws -> URL {
-        let delegate = DownloadDelegate { [weak self] fraction in
+        let delegate = DownloadDelegate(tempFileExtension: "pkg") { [weak self] fraction in
             Task { @MainActor [weak self] in
                 self?.state = .downloading(progress: fraction)
             }
@@ -538,72 +538,3 @@ enum UpdateError: LocalizedError {
     }
 }
 
-// MARK: - Download Delegate
-
-/// Bridges URLSessionDownloadTask delegate callbacks to a CheckedContinuation.
-/// Must be used as the delegate of a dedicated URLSession (not URLSession.shared)
-/// because per-task delegates are not supported on download tasks.
-///
-/// Marked `@unchecked Sendable` because URLSession serializes delegate
-/// callbacks on its delegate queue — mutable-state writes never race in
-/// practice, but the compiler can't prove it.
-private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
-    private let onProgress: @Sendable (Double) -> Void
-    var continuation: CheckedContinuation<URL, Error>?
-    private var tempCopy: URL?
-    private var hasResumed = false
-
-    init(onProgress: @escaping @Sendable (Double) -> Void) {
-        self.onProgress = onProgress
-    }
-
-    func urlSession(
-        _ session: URLSession,
-        downloadTask: URLSessionDownloadTask,
-        didWriteData bytesWritten: Int64,
-        totalBytesWritten: Int64,
-        totalBytesExpectedToWrite: Int64
-    ) {
-        guard totalBytesExpectedToWrite > 0 else { return }
-        let fraction = Double(totalBytesWritten) / Double(totalBytesExpectedToWrite)
-        onProgress(min(fraction, 1.0))
-    }
-
-    func urlSession(
-        _ session: URLSession,
-        downloadTask: URLSessionDownloadTask,
-        didFinishDownloadingTo location: URL
-    ) {
-        // The file at `location` is deleted after this method returns,
-        // so copy it to a stable temp path before resuming the continuation.
-        let dest = FileManager.default.temporaryDirectory
-            .appending(component: "thane-download-\(UUID().uuidString).pkg")
-        do {
-            try FileManager.default.copyItem(at: location, to: dest)
-            tempCopy = dest
-        } catch {
-            guard !hasResumed else { return }
-            hasResumed = true
-            continuation?.resume(throwing: error)
-            continuation = nil
-        }
-    }
-
-    func urlSession(
-        _ session: URLSession,
-        task: URLSessionTask,
-        didCompleteWithError error: Error?
-    ) {
-        guard !hasResumed else { return }
-        hasResumed = true
-        if let error {
-            continuation?.resume(throwing: error)
-        } else if let tempCopy {
-            continuation?.resume(returning: tempCopy)
-        } else {
-            continuation?.resume(throwing: UpdateError.binaryNotFoundInArchive)
-        }
-        continuation = nil
-        session.finishTasksAndInvalidate()
-    }
-}
