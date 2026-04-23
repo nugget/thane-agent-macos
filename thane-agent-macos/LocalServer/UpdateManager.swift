@@ -107,10 +107,12 @@ final class UpdateManager {
     private static let repoName = "thane-ai-agent"
     private static let checkIntervalSeconds: TimeInterval = 86400 // 24 hours
 
+    // Read from GitHubReleaseResponse (a nonisolated struct), so must be
+    // nonisolated itself. Safe — it's an immutable string constant.
     #if arch(arm64)
-    private static let platformSuffix = "darwin_arm64.pkg"
+    nonisolated static let platformSuffix = "darwin_arm64.pkg"
     #elseif arch(x86_64)
-    private static let platformSuffix = "darwin_amd64.pkg"
+    nonisolated static let platformSuffix = "darwin_amd64.pkg"
     #endif
 
     init() {
