@@ -122,17 +122,11 @@ struct UpdateSettingsSection: View {
             }
 
         case .installed(let version):
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                    Text("Version \(version) installed")
-                        .font(.subheadline.weight(.medium))
-                }
-
-                Button("Restart Server") { binaryManager.restart() }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
+            HStack(spacing: 6) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("Version \(version) installed")
+                    .font(.subheadline.weight(.medium))
             }
 
         case .failed(let message):
