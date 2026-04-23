@@ -2,9 +2,15 @@ set dotenv-load
 
 app               := "thane-agent-macos"
 build-dir         := "build"
-notary-profile    := env("NOTARYTOOL_PROFILE", "notarytool")
 deploy-path       := env("DEPLOY_PATH", "Applications")
-signing-identity  := env("SIGNING_IDENTITY", "Developer ID Application: David McNett (9KR5L363XM)")
+
+# Release-engineering credentials — sourced from the environment. Names match
+# the thane-ai-agent release scripts so both projects can share one .env file.
+#   THANE_NOTARY_PROFILE    — keychain credential profile for `xcrun notarytool`
+#   THANE_CODESIGN_IDENTITY — Developer ID Application identity (from `security find-identity`)
+notary-profile    := env("THANE_NOTARY_PROFILE", env("NOTARYTOOL_PROFILE", ""))
+signing-identity  := env("THANE_CODESIGN_IDENTITY", "")
+
 export DEVELOPER_DIR := env("DEVELOPER_DIR", "/Applications/Xcode.app/Contents/Developer")
 
 # List available recipes
@@ -94,15 +100,45 @@ stamp:
     }
     SWIFT
 
-# Export a Developer ID-signed .app from the archive.
+# Export a Developer ID-signed .app from the archive. Generates an
+# ExportOptions plist from THANE_CODESIGN_IDENTITY so the team ID never
+# gets checked into the repo.
 [group('build')]
 export: archive
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{signing-identity}}" ]; then
+        echo "THANE_CODESIGN_IDENTITY is not set — required for signed exports." >&2
+        echo "Example: 'Developer ID Application: Your Name (TEAMID1234)'" >&2
+        exit 1
+    fi
+    team_id="$(printf '%s' "{{signing-identity}}" | sed -E 's/.*\(([A-Z0-9]+)\).*/\1/')"
+    if [ -z "$team_id" ] || [ "$team_id" = "{{signing-identity}}" ]; then
+        echo "Could not extract team ID from THANE_CODESIGN_IDENTITY." >&2
+        exit 1
+    fi
     rm -rf "{{build-dir}}/export"
+    export_plist="{{build-dir}}/ExportOptions.plist"
+    mkdir -p "{{build-dir}}"
+    cat > "$export_plist" <<EOF
+    <?xml version="1.0" encoding="UTF-8"?>
+    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+    <plist version="1.0">
+    <dict>
+        <key>method</key>
+        <string>developer-id</string>
+        <key>teamID</key>
+        <string>${team_id}</string>
+        <key>signingStyle</key>
+        <string>automatic</string>
+    </dict>
+    </plist>
+    EOF
     xcodebuild -exportArchive \
         -archivePath "{{build-dir}}/{{app}}.xcarchive" \
         -exportPath "{{build-dir}}/export" \
-        -exportOptionsPlist ExportOptions.plist
-    @echo "Exported: {{build-dir}}/export/{{app}}.app"
+        -exportOptionsPlist "$export_plist"
+    echo "Exported: {{build-dir}}/export/{{app}}.app"
 
 # Clean build artifacts
 [group('build')]
@@ -141,6 +177,12 @@ ci: build test
 # notarytool doesn't accept raw .app bundles).
 [group('release-engineering')]
 notarize-app: export
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{notary-profile}}" ]; then
+        echo "THANE_NOTARY_PROFILE is not set — required for notarization." >&2
+        exit 1
+    fi
     ditto -c -k --keepParent \
         "{{build-dir}}/export/{{app}}.app" \
         "{{build-dir}}/{{app}}-notarize.zip"
@@ -148,7 +190,7 @@ notarize-app: export
         --keychain-profile "{{notary-profile}}" \
         --wait
     xcrun stapler staple "{{build-dir}}/export/{{app}}.app"
-    @echo "Notarized and stapled: {{build-dir}}/export/{{app}}.app"
+    echo "Notarized and stapled: {{build-dir}}/export/{{app}}.app"
 
 # Package the notarized .app into a signed, notarized, stapled DMG.
 [doc("Building block: produce a release-ready DMG from the notarized .app")]
@@ -210,6 +252,16 @@ release version:
     version="{{version}}"
     version="${version#v}"
     tag="v${version}"
+
+    # Preflight: release-engineering env vars present.
+    if [ -z "{{signing-identity}}" ]; then
+        echo "THANE_CODESIGN_IDENTITY is not set — required for signed releases." >&2
+        exit 1
+    fi
+    if [ -z "{{notary-profile}}" ]; then
+        echo "THANE_NOTARY_PROFILE is not set — required for notarization." >&2
+        exit 1
+    fi
 
     # Preflight: clean working tree.
     if ! git diff --quiet HEAD -- || ! git diff --cached --quiet -- ; then
