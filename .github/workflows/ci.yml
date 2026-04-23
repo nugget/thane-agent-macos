@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   ci:
-    runs-on: macos-15
+    runs-on: macos-26
 
     steps:
       - uses: actions/checkout@v6
@@ -24,7 +24,7 @@ jobs:
           fetch-tags: true
 
       - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.app/Contents/Developer
+        run: sudo xcode-select -s /Applications/Xcode_26.app/Contents/Developer
 
       - name: Install just
         uses: extractions/setup-just@v4
