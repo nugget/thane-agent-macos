@@ -214,6 +214,16 @@ release version:
         exit 1
     fi
 
+    # Preflight: HEAD is already on origin/main. Releases don't push commits;
+    # everything must be merged via PR first.
+    git fetch --quiet origin main
+    if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
+        echo "HEAD does not match origin/main — merge release commits via PR first." >&2
+        echo "  local  HEAD: $(git rev-parse --short HEAD)" >&2
+        echo "  origin/main: $(git rev-parse --short origin/main)" >&2
+        exit 1
+    fi
+
     # Gate: full CI must pass.
     echo "==> Running CI gate..."
     just ci
@@ -230,9 +240,8 @@ release version:
     echo "==> Writing checksums..."
     just checksums
 
-    # Push commit + tag so GitHub shows the tag when the release is created.
+    # Push the tag only — commits must already be on origin/main.
     echo "==> Pushing tag..."
-    git push origin main
     git push origin "$tag"
 
     # GitHub release with CHANGELOG notes + DMG + checksums.
