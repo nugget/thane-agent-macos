@@ -1,5 +1,4 @@
 import AppKit
-import CryptoKit
 import Foundation
 import os
 
@@ -204,11 +203,14 @@ final class AppUpdateManager {
         guard let checksumText = String(data: checksumData, encoding: .utf8) else {
             throw AppUpdateError.checksumParseFailure
         }
-        guard let expectedHash = parseChecksum(text: checksumText, filename: dmgFilename) else {
+        guard let expectedHash = Checksum.parseChecksum(text: checksumText, filename: dmgFilename) else {
             throw AppUpdateError.checksumNotFound(filename: dmgFilename)
         }
-        let dmgData = try Data(contentsOf: dmgPath)
-        let actualHash = SHA256.hash(data: dmgData).map { String(format: "%02x", $0) }.joined()
+        // Hash + spctl both do blocking I/O or wait on a subprocess — keep
+        // them off the main actor so the SwiftUI settings panel stays live.
+        let actualHash = try await Task.detached(priority: .userInitiated) {
+            try Checksum.sha256(of: dmgPath)
+        }.value
         guard actualHash == expectedHash else {
             logger.error("SHA-256 mismatch: expected \(expectedHash), got \(actualHash)")
             try? fm.removeItem(at: workDir)
@@ -217,7 +219,9 @@ final class AppUpdateManager {
         logger.info("SHA-256 verified for \(dmgFilename)")
 
         // Verify the DMG is signed + notarized — spctl returns non-zero if not.
-        try assertGatekeeperAccepts(dmgPath: dmgPath)
+        try await Task.detached(priority: .userInitiated) { [logger] in
+            try AppUpdateManager.assertGatekeeperAccepts(dmgPath: dmgPath, logger: logger)
+        }.value
 
         // Hand off to the helper. The helper waits for us to exit, swaps the
         // bundle, and relaunches — so this is our last step before terminate.
@@ -262,18 +266,7 @@ final class AppUpdateManager {
         }
     }
 
-    private func parseChecksum(text: String, filename: String) -> String? {
-        for line in text.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasSuffix(filename) else { continue }
-            let parts = trimmed.split(separator: " ", maxSplits: 1)
-            guard let hash = parts.first else { continue }
-            return String(hash)
-        }
-        return nil
-    }
-
-    private func assertGatekeeperAccepts(dmgPath: URL) throws {
+    nonisolated static func assertGatekeeperAccepts(dmgPath: URL, logger: Logger) throws {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/sbin/spctl")
         proc.arguments = ["--assess", "--type", "open", "--context", "context:primary-signature", dmgPath.path]

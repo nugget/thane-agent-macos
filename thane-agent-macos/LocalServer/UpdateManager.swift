@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import os
 
@@ -253,12 +252,13 @@ final class UpdateManager {
         guard let checksumText = String(data: checksumData, encoding: .utf8) else {
             throw UpdateError.checksumParseFailure
         }
-        let expectedHash = parseChecksum(text: checksumText, filename: archiveFilename)
+        let expectedHash = Checksum.parseChecksum(text: checksumText, filename: archiveFilename)
         guard let expectedHash else {
             throw UpdateError.checksumNotFound(filename: archiveFilename)
         }
-        let archiveData = try Data(contentsOf: archivePath)
-        let actualHash = SHA256.hash(data: archiveData).map { String(format: "%02x", $0) }.joined()
+        let actualHash = try await Task.detached(priority: .userInitiated) {
+            try Checksum.sha256(of: archivePath)
+        }.value
         guard actualHash == expectedHash else {
             logger.error("SHA-256 mismatch: expected \(expectedHash), got \(actualHash)")
             try? fm.removeItem(at: tempDir)
@@ -351,18 +351,6 @@ final class UpdateManager {
             self.activeDownloadTask = task
             task.resume()
         }
-    }
-
-    private func parseChecksum(text: String, filename: String) -> String? {
-        for line in text.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard trimmed.hasSuffix(filename) else { continue }
-            // Format: "hash  filename" or "hash filename"
-            let parts = trimmed.split(separator: " ", maxSplits: 1)
-            guard let hash = parts.first else { continue }
-            return String(hash)
-        }
-        return nil
     }
 
     private func expandPackage(pkgPath: URL, destination: URL) async throws {
