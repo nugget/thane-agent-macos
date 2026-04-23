@@ -7,29 +7,42 @@
 
 > Native macOS companion app for [Thane](https://github.com/nugget/thane-ai-agent).
 
-Thane is an autonomous AI agent that runs on your hardware. This is the Mac side of the story: a signed, notarized SwiftUI app that **connects your Mac to a running Thane instance** as both a chat client and a platform service provider. It brings your Calendar, Contacts, Reminders, Focus, and Shortcuts into the agent's reach through native frameworks — no CardDAV scraping, no ICS polling, no cloud hop.
+A signed, notarized SwiftUI app that pairs a Mac with a running [Thane](https://github.com/nugget/thane-ai-agent) instance. It acts as a chat client and as the landing spot for a growing set of platform service providers that expose native macOS frameworks to the agent.
 
-It also manages the `thane` binary on the Mac itself: auto-discovers existing installs, downloads signed updates from GitHub releases, verifies SHA-256 checksums, inspects code signatures, and keeps the local server healthy.
+**Status: early.** The WebSocket connection, chat UI, and Thane binary manager are working end-to-end. Platform service providers are in active development — see [What's implemented](#whats-implemented) for the honest status.
 
 ## Why it exists
 
-**Native framework access.** Home Assistant integrations for Contacts, Calendar, and Reminders go through network scraping — CardDAV, CalDAV, ICS. This app hands the agent direct, first-class access to Apple's own frameworks on your Mac, which is both faster and correct.
+Thane is cross-platform, but much of what makes a Mac a Mac — Calendar, Contacts, Focus modes, Reminders, Shortcuts — lives behind Apple frameworks that aren't reachable from a Linux agent without lossy workarounds (CardDAV scraping, ICS polling, etc.). This app is the vehicle for giving a Thane instance first-class access to those frameworks when it's paired with a Mac operator.
 
-**Chat anywhere on the Mac.** Menu bar presence with live connection status. A Dashboard window for conversation history. No browser tab required.
+It also manages the local `thane` binary: auto-discovers existing installs, downloads signed updates from GitHub releases, verifies SHA-256 checksums, inspects code signatures, and supervises the local process.
 
-**Trustworthy binary management.** The in-app updater fetches Thane releases, verifies notarization and checksums, stops and restarts the local process atomically, and surfaces code signing info in Process Health so you can see exactly what's running.
+## What's implemented
 
-**Mac-native at every level.** Hardened runtime. Developer ID signed. Notarized by Apple. Built with SwiftUI and `@Observable`, SwiftData for persistence, Security.framework for signature inspection — no third-party dependencies. One `.dmg`, drag to Applications, done.
+Working today:
 
-## Quick Start
+- **Chat client** — Menu bar presence, Dashboard window, conversation history (SwiftData)
+- **WebSocket transport** — Auth handshake and platform request routing to a Thane server
+- **Binary update manager** — GitHub release polling, signed pkg install, SHA-256 verification, atomic stop/restart
+- **Process Health** — Live resource stats, code-signature inspection, installer provenance
 
-### Install
+Nascent:
+
+- **Calendar provider** — EventKit-backed, lightly exercised. Permission flow works; request coverage is minimal and untested at scale
+
+Not started:
+
+- Contacts, Reminders, Focus modes, Shortcuts
+
+The platform-provider architecture (`PlatformServiceRouter`, `PlatformServiceProvider` protocol) is ready to host more providers as they land.
+
+## Install
 
 Download the latest signed `.dmg` from the [Releases page](https://github.com/nugget/thane-agent-macos/releases/latest) and drag the app into Applications.
 
-The app self-updates the `thane` binary on first launch — point it at your running [Thane](https://github.com/nugget/thane-ai-agent) server and you're set.
+Point it at your running [Thane](https://github.com/nugget/thane-ai-agent) server in Settings → Connection, and it'll handle the `thane` binary on disk for you.
 
-### Build from source
+## Build from source
 
 Requires Xcode 26+ and [just](https://github.com/casey/just).
 
@@ -39,15 +52,14 @@ cd thane-agent-macos
 just build
 ```
 
-The full CI gate runs via `just ci` (build + tests). See [CLAUDE.md](CLAUDE.md) for project conventions.
+`just ci` runs the full gate (build + tests). See [CLAUDE.md](CLAUDE.md) for project conventions.
 
 ## Releases
 
 Tagged releases publish a signed, notarized, stapled `.dmg` plus a SHA-256
 checksums file to GitHub. The release workstation drives the whole pipeline
 locally — signing identity and notary profile stay in the operator's
-keychain — and the macOS app itself manages updates for the `thane` binary
-via GitHub's release API on its own.
+keychain.
 
 - `just release 0.1.0` — cut a formal release (tag, DMG, notarize, staple, upload)
 - `just release 0.2.0-rc.1` — auto-detected as a prerelease
@@ -57,11 +69,11 @@ See [CHANGELOG.md](CHANGELOG.md) for what's in each release.
 ## Architecture at a glance
 
 - **App entry / windows** — `ThaneApp.swift`, `AppState.swift` (central `@Observable` coordinator)
-- **Local server** — `BinaryManager.swift` (process lifecycle, code-signature inspection), `UpdateManager.swift` (GitHub release polling, download, verify, install)
+- **Local server** — `BinaryManager.swift` (process lifecycle, signature inspection), `UpdateManager.swift` (release polling, download, verify, install)
 - **Connection** — `ServerConnection.swift` (WebSocket client with auth handshake and platform request routing)
-- **Platform services** — Native access to Contacts, Calendar, Reminders, Focus, and Shortcuts, routed over the same WebSocket
+- **Platform services** — `PlatformServiceRouter.swift` dispatches requests to registered providers (currently: `CalendarService`)
 - **Chat** — SwiftUI chat view backed by SwiftData (`Conversation`, `ChatMessage`)
-- **Process Health** — Live resource stats and code-signature summary for the running `thane` binary
+- **Process Health** — Live resource stats and code-signature summary
 
 ## Related
 
