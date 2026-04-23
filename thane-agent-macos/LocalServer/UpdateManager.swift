@@ -541,7 +541,11 @@ enum UpdateError: LocalizedError {
 /// Bridges URLSessionDownloadTask delegate callbacks to a CheckedContinuation.
 /// Must be used as the delegate of a dedicated URLSession (not URLSession.shared)
 /// because per-task delegates are not supported on download tasks.
-private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate {
+///
+/// Marked `@unchecked Sendable` because URLSession serializes delegate
+/// callbacks on its delegate queue — mutable-state writes never race in
+/// practice, but the compiler can't prove it.
+private final class DownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     private let onProgress: @Sendable (Double) -> Void
     var continuation: CheckedContinuation<URL, Error>?
     private var tempCopy: URL?
