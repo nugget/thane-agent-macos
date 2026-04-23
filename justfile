@@ -33,17 +33,28 @@ describe:
 
 # --- Build ---
 
-# Build for local development (signed with whatever identity is available).
+# Build for local development. Honors CODE_SIGNING_ALLOWED=NO for CI/ad-hoc
+# environments without a Developer ID certificate in the keychain.
 [group('build')]
 build: stamp
     #!/usr/bin/env bash
     set -euo pipefail
     marketing="$(just marketing-version)"
     build_num="$(just build-number)"
-    xcodebuild -scheme {{app}} -destination 'platform=macOS' \
-        MARKETING_VERSION="$marketing" \
-        CURRENT_PROJECT_VERSION="$build_num" \
-        build
+    args=(
+        -scheme "{{app}}"
+        -destination 'platform=macOS'
+        "MARKETING_VERSION=$marketing"
+        "CURRENT_PROJECT_VERSION=$build_num"
+    )
+    if [ "${CODE_SIGNING_ALLOWED:-YES}" = "NO" ]; then
+        args+=(
+            "CODE_SIGN_IDENTITY=-"
+            "CODE_SIGNING_REQUIRED=NO"
+            "CODE_SIGNING_ALLOWED=NO"
+        )
+    fi
+    xcodebuild "${args[@]}" build
 
 # Archive for distribution. Version comes from the nearest git tag.
 [group('build')]
@@ -100,12 +111,23 @@ clean:
 
 # --- Test ---
 
-# Build and run unit tests
+# Build and run unit tests. Same signing behavior as `just build`.
 [group('test')]
 test:
-    xcodebuild test \
-        -scheme {{app}} \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(
+        -scheme "{{app}}"
         -destination 'platform=macOS'
+    )
+    if [ "${CODE_SIGNING_ALLOWED:-YES}" = "NO" ]; then
+        args+=(
+            "CODE_SIGN_IDENTITY=-"
+            "CODE_SIGNING_REQUIRED=NO"
+            "CODE_SIGNING_ALLOWED=NO"
+        )
+    fi
+    xcodebuild "${args[@]}" test
 
 # --- CI ---
 
