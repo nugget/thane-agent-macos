@@ -70,7 +70,7 @@ keychain.
 - `just release 0.1.0` — cut a formal release (tag, DMG, notarize, staple, upload)
 - `just release 0.2.0-rc.1` — auto-detected as a prerelease
 
-See [CHANGELOG.md](CHANGELOG.md) for what's in each release.
+Release notes and artifacts live at [Releases](https://github.com/nugget/thane-agent-macos/releases).
 
 ## Architecture at a glance
 

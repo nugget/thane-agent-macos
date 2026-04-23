@@ -37,6 +37,6 @@ When reviewing or generating code, watch for:
 
 ## Doc Hygiene
 
-- Behavioral changes must update `AGENTS.md`, `CLAUDE.md`, `README`,
-  or `CHANGELOG` in the same PR
+- Behavioral changes must update `AGENTS.md`, `CLAUDE.md`, or
+  `README` in the same PR
 - Doc drift is worse than missing docs

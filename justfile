@@ -235,15 +235,10 @@ checksums:
     echo "Wrote $release_dir/$output"
     cat "$output"
 
-# Extract the CHANGELOG section for the current version.
-[group('release-engineering')]
-release-notes:
-    @scripts/release-notes.sh "$(just marketing-version)"
-
 # --- Release flow ---
 
 # Full release: verify, build, notarize, DMG, checksums, tag, GitHub release.
-# Requires a clean working tree and a CHANGELOG entry for VERSION.
+# Release notes are auto-generated from PRs/commits since the last tag.
 [doc("Cut a formal release for VERSION (e.g. 0.1.0). Tags, builds DMG, uploads to GitHub.")]
 [group('release-engineering')]
 release version:
@@ -266,12 +261,6 @@ release version:
     # Preflight: clean working tree.
     if ! git diff --quiet HEAD -- || ! git diff --cached --quiet -- ; then
         echo "Working tree has uncommitted changes — commit or stash before releasing." >&2
-        exit 1
-    fi
-
-    # Preflight: CHANGELOG entry exists.
-    if ! ./scripts/release-notes.sh "$version" >/dev/null 2>&1; then
-        echo "No CHANGELOG section for $version — add one before releasing." >&2
         exit 1
     fi
 
@@ -318,24 +307,22 @@ release version:
     echo "==> Pushing tag..."
     git push origin "$tag"
 
-    # GitHub release with CHANGELOG notes + DMG + checksums.
+    # GitHub release — notes auto-generated from merged PRs + commits since
+    # the previous tag.
     release_dir="{{build-dir}}/release"
     dmg_path="${release_dir}/{{app}}_${version}.dmg"
     checksum_path="${release_dir}/{{app}}_${version}_checksums.txt"
-    notes_file="$(mktemp -t thane-release-notes)"
-    ./scripts/release-notes.sh "$version" > "$notes_file"
 
     echo "==> Creating GitHub release..."
     prerelease_flag=""
     case "$version" in *-*) prerelease_flag="--prerelease" ;; esac
     gh release create "$tag" \
         --title "$tag" \
-        --notes-file "$notes_file" \
+        --generate-notes \
         $prerelease_flag \
         "$dmg_path" \
         "$checksum_path"
 
-    rm -f "$notes_file"
     echo "==> Released $tag"
 
 # --- Deploy ---

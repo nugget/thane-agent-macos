@@ -13,5 +13,5 @@
 - [ ] Commits are signed
 - [ ] Commit messages use conventional format (`feat:`, `fix:`, etc.)
 - [ ] Related issue referenced (`Refs #NNN` or `Closes #NNN`)
-- [ ] Impacted documentation updated (`AGENTS.md`, `CLAUDE.md`, `README`, `CHANGELOG`)
+- [ ] Impacted documentation updated (`AGENTS.md`, `CLAUDE.md`, `README`)
 - [ ] No new third-party dependencies without discussion
