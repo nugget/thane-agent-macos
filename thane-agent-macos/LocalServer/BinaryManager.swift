@@ -503,9 +503,7 @@ final class BinaryManager {
             append("thane stopped", isError: false)
         } else {
             recentCrashTimestamps.append(Date())
-            let cutoff = Date().addingTimeInterval(-300) // 5-minute window
-            recentCrashTimestamps = recentCrashTimestamps.filter { $0 > cutoff }
-            recentCrashCount = recentCrashTimestamps.count
+            pruneStaleCrashes()
             state = .crashed(code: code)
             append("thane exited with code \(code)", isError: true)
             logger.error("thane crashed, exit code \(code)")
@@ -574,8 +572,26 @@ final class BinaryManager {
         statsTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.collectStats(pid: pid)
+                // Also prune the crash window so Degraded / Crash Loop state
+                // decays when the process stabilizes, instead of staying sticky
+                // until the next crash.
+                await self?.pruneStaleCrashes()
                 do { try await Task.sleep(for: .seconds(3)) } catch { break }
             }
+        }
+    }
+
+    /// Drop crash timestamps older than the 5-minute window and republish the
+    /// count so `@Observable` consumers re-render. Cheap no-op when the list
+    /// is empty or already up to date.
+    private func pruneStaleCrashes() {
+        let cutoff = Date().addingTimeInterval(-300)
+        let pruned = recentCrashTimestamps.filter { $0 > cutoff }
+        if pruned.count != recentCrashTimestamps.count {
+            recentCrashTimestamps = pruned
+        }
+        if recentCrashCount != pruned.count {
+            recentCrashCount = pruned.count
         }
     }
 
