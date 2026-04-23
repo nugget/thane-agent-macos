@@ -1,0 +1,35 @@
+name: Bug Report
+description: Something isn't working as expected
+labels: ["bug"]
+body:
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed Behavior
+      description: What happened? Include error messages, crash logs, or a partial stack trace if available.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should have happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: >
+        Steps to reproduce, relevant config, or the situation that triggered it.
+        Include file paths or symbols if known.
+    validations:
+      required: false
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: macOS version, Xcode version (if building from source), thane-agent-macos version, connected Thane server version.
+      placeholder: "macOS 26.4, Xcode 26.2, thane-agent-macos v0.1.0, thane v0.9.1-rc.1"
+    validations:
+      required: false
