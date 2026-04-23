@@ -5,17 +5,23 @@
 [![License](https://img.shields.io/github/license/nugget/thane-agent-macos)](LICENSE)
 [![macOS](https://img.shields.io/badge/macOS-26%2B-blue)](https://www.apple.com/macos/)
 
-> Native macOS companion app for [Thane](https://github.com/nugget/thane-ai-agent).
+> The supported way to run [Thane](https://github.com/nugget/thane-ai-agent) on macOS.
 
-A signed, notarized SwiftUI app that pairs a Mac with a running [Thane](https://github.com/nugget/thane-ai-agent) instance. It acts as a chat client and as the landing spot for a growing set of platform service providers that expose native macOS frameworks to the agent.
+A signed, notarized SwiftUI companion app that makes running a Thane agent on a Mac straightforward: it installs and supervises the `thane` binary, gives you a native chat UI and menu bar presence, and lays the foundation for tight integration with the Apple applications ecosystem — Calendar, Contacts, Reminders, Focus modes, Shortcuts.
 
-**Status: early.** The WebSocket connection, chat UI, and Thane binary manager are working end-to-end. Platform service providers are in active development — see [What's implemented](#whats-implemented) for the honest status.
+**If you want Thane on macOS, this is the recommended path.** You can still build and run the Go binary by hand, but the app handles the operational surface — install, updates, permissions, process health, and (in time) native platform integrations — so you don't have to.
+
+**Status: early.** The WebSocket connection, chat UI, and Thane binary manager work end-to-end. Platform service providers are in active development — see [What's implemented](#whats-implemented) for the honest status.
 
 ## Why it exists
 
-Thane is cross-platform, but much of what makes a Mac a Mac — Calendar, Contacts, Focus modes, Reminders, Shortcuts — lives behind Apple frameworks that aren't reachable from a Linux agent without lossy workarounds (CardDAV scraping, ICS polling, etc.). This app is the vehicle for giving a Thane instance first-class access to those frameworks when it's paired with a Mac operator.
+Running Thane well on a Mac involves more than compiling the Go binary:
 
-It also manages the local `thane` binary: auto-discovers existing installs, downloads signed updates from GitHub releases, verifies SHA-256 checksums, inspects code signatures, and supervises the local process.
+- **Install and updates.** The app downloads signed `.pkg` releases from GitHub, verifies SHA-256 checksums and notarization, installs atomically, and supervises the local process.
+- **Operator UI.** Menu bar, chat window, Process Health view with resource stats and code-signature inspection — no terminal required for day-to-day use.
+- **Apple-ecosystem integration.** Calendar, Contacts, Focus, Reminders, and Shortcuts live behind Apple frameworks that aren't reachable from a Linux agent without lossy workarounds (CardDAV scraping, ICS polling). This app is the bridge that lets Thane reach into those frameworks natively when an operator runs on a Mac.
+
+It's designed as the *Mac-shaped* front end for Thane: not a chat client on the side, but the canonical macOS deployment target.
 
 ## What's implemented
 
