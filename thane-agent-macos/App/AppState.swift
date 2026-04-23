@@ -11,6 +11,7 @@ final class AppState {
     let platformRouter = PlatformServiceRouter()
     let binaryManager = BinaryManager()
     let updateManager = UpdateManager()
+    let appUpdateManager = AppUpdateManager()
     let permissionsManager = PermissionsManager()
     let calendarService = CalendarService()
 
@@ -115,10 +116,21 @@ final class AppState {
         updateManager.startPeriodicChecks { [weak self] in
             self?.binaryManager.detectedVersion
         }
+
+        // App self-update uses the stamped git-describe string as the
+        // current version (same source as the About window).
+        appUpdateManager.startPeriodicChecks {
+            AppVersion.current
+        }
     }
 
     var updateAvailable: Bool {
         if case .available = updateManager.state { return true }
+        return false
+    }
+
+    var appUpdateAvailable: Bool {
+        if case .available = appUpdateManager.state { return true }
         return false
     }
 

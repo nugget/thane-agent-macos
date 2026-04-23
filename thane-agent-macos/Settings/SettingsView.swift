@@ -186,7 +186,7 @@ struct LocalServerSettingsView: View {
                 }
             }
 
-            Section("Updates") {
+            Section("Binary Updates") {
                 UpdateSettingsSection()
             }
 
@@ -536,6 +536,10 @@ struct GeneralSettingsView: View {
                         .font(.caption)
                     }
                 }
+            }
+
+            Section("Application Updates") {
+                AppUpdateSettingsSection()
             }
         }
         .formStyle(.grouped)
