@@ -1,21 +1,8 @@
 # CLAUDE.md
 
-macOS companion app for [thane-ai-agent](https://github.com/nugget/thane-ai-agent).
-Swift/SwiftUI, targets macOS on Apple Silicon.
-
-## Build & Test
-
-This project uses a `justfile`. Always use `just`, never call `xcodebuild` directly.
-
-```bash
-just build          # Debug build
-just test           # Run unit + UI tests
-just ci             # Full CI gate (build + test)
-```
-
-**MANDATORY: `just ci` must pass locally before every `git push`. No
-exceptions.** Do not rely on GitHub Actions — run the full gate locally
-first and fix any issues before pushing.
+For project conventions, build commands, architecture, gotchas, and
+contribution guidelines, see [AGENTS.md](AGENTS.md). Everything below is
+specific to the Claude Code operator experience on this repo.
 
 ## Commit Signing
 
@@ -39,21 +26,51 @@ git config --local gpg.ssh.allowedsignersfile "~/.claude/ssh/allowed_signers"
 git config --local gpg.ssh.program ssh-keygen
 ```
 
-## Architecture
+## CI Gate
 
-- **ThaneApp.swift** — App entry, window definitions (Main, MenuBar, Settings, Process Health, Dashboard, About)
-- **AppState.swift** — Central `@Observable` coordinator; owns `ServerConnection`, `BinaryManager`, `UpdateManager`, `PlatformServiceRouter`; version compatibility gating
-- **AppVersion.swift** — Bundle version constant (`AppVersion.current`, `AppVersion.semver`)
-- **BinaryManager.swift** — Local `thane` process lifecycle, health monitoring, config parsing, code signature inspection
-- **UpdateManager.swift** — GitHub release checking, binary download/verify/install with SHA-256 + CryptoKit
-- **CodeSignatureInfo.swift** — `AppleCodeSignature` (Security.framework) for code signing and notarization inspection
-- **ServerConnection.swift** — WebSocket client with auth handshake and platform request routing
-- **ProcessHealthView.swift** — Live process health status, resource stats, code signature summary
-- Data models use SwiftData (`ServerConfig`, `Conversation`, `ChatMessage`)
+**MANDATORY: `just ci` must pass locally before every `git push`. No
+exceptions.** Do not rely on GitHub Actions — run the full gate locally
+first and fix any issues before pushing. CI is a safety net, not the
+first line of defense.
 
-## Conventions
+## Release Engineering
 
-- SwiftUI with `@Observable` (not Combine)
-- Environment-based dependency injection via `AppState`
-- No third-party dependencies — everything uses system frameworks
-- Match existing patterns before introducing new ones
+Releases require `THANE_CODESIGN_IDENTITY` and `THANE_NOTARY_PROFILE`
+in the environment. The user typically sets these in their fish shell,
+so Claude's bash subshells won't inherit them. Two options:
+
+1. Ask the user to run `just release VERSION` from their own shell.
+2. Ask them to drop the vars into `.env` (gitignored) so just's
+   `set dotenv-load` can pick them up.
+
+Never push directly to `main` — `just release` gates on `HEAD` matching
+`origin/main`, so release commits must be merged via PR first.
+
+## GitHub Collaboration
+
+Be a good GitHub collaborator. Review threads left open signal
+unfinished work — always close the loop.
+
+**When addressing review feedback:**
+
+1. Fix the issue in a commit
+2. Reply to the thread with the fixing commit hash and a one-line
+   explanation
+3. Resolve the conversation
+4. If deferring (out of scope, follow-up issue), say so explicitly
+   before resolving
+
+**After a round of fixes:** Request re-review so the reviewer knows
+the ball is back in their court.
+
+**Resolving threads via CLI:**
+
+```bash
+gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREAD_ID"}) { thread { isResolved } } }'
+```
+
+**PR hygiene:**
+
+- Check off test plan items as they are verified
+- Use `Refs #NNN` or `Closes #NNN` in commit bodies
+- Keep the PR description accurate as scope evolves
