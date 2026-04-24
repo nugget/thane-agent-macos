@@ -17,11 +17,16 @@ A signed, notarized SwiftUI companion app that makes running a Thane agent on a 
 
 Running Thane well on a Mac involves more than compiling the Go binary:
 
+- **Native containment.** This is the big one. The app brings Thane into macOS's native privacy and security model so operators can contain the agent using the same guarantees Apple offers every other app on the system:
+  - **TCC-gated data access.** Platform-provider calls into Calendar (and Contacts, Reminders, Focus, Shortcuts as they land) go through macOS's Transparency, Consent, and Control framework. The user grants consent per capability and can revoke it from System Settings — not a global trust-the-agent toggle.
+  - **Declared entitlements.** The app declares exactly what it can touch in its entitlements file. Anything not listed, it can't reach. Add a capability, add an entitlement, prompt the user — the OS enforces the envelope.
+  - **Hardened runtime + Developer ID + notarization.** Library validation, no dyld injection, no writable-and-executable memory. Signed by a real Apple Developer ID, notarized by Apple so Gatekeeper trusts every DMG. Operators see the provenance before they launch.
+  - **Supervised local binary.** When run as a local Thane host, the app inspects the `thane` binary's code signature and notarization status via Security.framework before launch and surfaces that provenance in Process Health. The operator knows which process they're running, not just that *some* `thane` is on disk.
 - **Install and updates.** The app downloads signed `.pkg` releases from GitHub, verifies SHA-256 checksums and notarization, installs atomically, and supervises the local process.
 - **Operator UI.** Menu bar, chat window, Process Health view with resource stats and code-signature inspection — no terminal required for day-to-day use.
 - **Apple-ecosystem integration.** Calendar, Contacts, Focus, Reminders, and Shortcuts live behind Apple frameworks that aren't reachable from a Linux agent without lossy workarounds (CardDAV scraping, ICS polling). This app is the bridge that lets Thane reach into those frameworks natively when an operator runs on a Mac.
 
-It's designed as the *Mac-shaped* front end for Thane: not a chat client on the side, but the canonical macOS deployment target.
+It's designed as the *Mac-shaped* front end for Thane: not a chat client on the side, but the canonical macOS deployment target — with the full macOS security stack between the operator and the agent.
 
 ## What's implemented
 
