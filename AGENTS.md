@@ -7,6 +7,12 @@ provides the operator UI (menu bar, chat, dashboard, Process Health),
 and hosts platform service providers that expose Apple frameworks to the
 agent.
 
+Core motivation: bring Thane inside macOS's native privacy and security
+model. TCC-gated platform access, declared entitlements, hardened
+runtime, Gatekeeper-trusted DMGs, and code-signature inspection of the
+managed binary all add up to a containment story that a bare Go daemon
+running outside the OS's privacy framework can't tell.
+
 If you're here to understand the project, start with [README.md](README.md).
 
 Everything below is what you need to contribute code.
@@ -148,15 +154,53 @@ Silicon.
 
 ## Security
 
+This is a security-forward project. Containment is a product feature,
+not a cleanup step — changes that widen the attack surface need to
+justify themselves before they land.
+
+### Native containment model
+
+- **TCC for data access**: every platform-provider capability (Calendar
+  today; Contacts, Reminders, Focus, Shortcuts as they land) goes
+  through Apple's Transparency, Consent, and Control framework. User
+  grants are per-capability and revocable from System Settings.
+- **Declared entitlements**: whatever isn't in
+  `thane-agent-macos.entitlements` isn't reachable. Adding a capability
+  is a deliberate, reviewable act — include the entitlement, the usage
+  description, and wire the actual request-authorization flow in one
+  change.
+- **Hardened runtime**: enabled on every build. No dyld injection,
+  library validation required, no writable-executable memory. Don't
+  disable it to paper over a dependency issue; fix the dependency.
+- **Managed binary provenance**: `BinaryManager` inspects the `thane`
+  binary's code signature via Security.framework (`CodeSignatureInfo`)
+  before launch and surfaces the result in Process Health. If we start
+  a binary, we can tell the operator whose cert signed it and whether
+  Apple notarized it.
+
+### Signing & distribution
+
 - **Developer ID signed and notarized** — every release DMG and the
   .app inside. No ad-hoc signing for distribution.
-- **Hardened runtime** enabled.
-- **API tokens** in Keychain, never UserDefaults. Keyed by
-  `ServerConfig`.
-- **TLS verification** never disabled.
 - **Release credentials** stay on the release workstation (keychain
   profile for notarytool, signing cert in login keychain). No
   GitHub-hosted signing.
+
+### Runtime hygiene
+
+- **API tokens** in Keychain, never UserDefaults. Keyed by
+  `ServerConfig`.
+- **TLS verification** never disabled.
+
+### Known gaps
+
+- **App Sandbox** isn't on yet — the app runs outside Apple's
+  full sandbox container. Adopting it is a non-trivial migration
+  (entitlement changes, file-access brokering, UserDefaults suite
+  renaming) but it's on the roadmap.
+- The managed `thane` subprocess inherits our process environment; we
+  don't currently impose additional sandboxing on it beyond what
+  `.pkg` installation and the user's own account permissions provide.
 
 ## Contributing
 
