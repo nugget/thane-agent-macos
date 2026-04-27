@@ -3,48 +3,128 @@ import os
 
 // MARK: - Semantic Version
 
-struct SemanticVersion: Comparable, CustomStringConvertible, Sendable {
+/// Kept nonisolated so it can be parsed and compared from background
+/// tasks (the GitHub poll runs off the main actor) without forcing
+/// hops back into the @MainActor UpdateManager.
+nonisolated struct SemanticVersion: Comparable, CustomStringConvertible, Sendable {
     let major: Int
     let minor: Int
     let patch: Int
+    /// SemVer 2.0.0 pre-release identifier (e.g. "rc1", "beta.2").
+    /// Sorts BELOW a stable tag at the same MAJOR.MINOR.PATCH —
+    /// "0.9.1-rc1" comes before "0.9.1".
     let preRelease: String?
+    /// Number of commits since the nearest tag, parsed from
+    /// `git describe` output (the "-N-gHASH" suffix). Zero means
+    /// the version is exactly at a tag. Non-zero means a dev
+    /// build that is N commits AHEAD of the tag — i.e. NEWER
+    /// than the tag, the inverse of a pre-release identifier.
+    let commitsAhead: Int
+    /// Abbreviated commit hash from `git describe` (without the
+    /// leading 'g'). Build metadata only — does NOT participate
+    /// in precedence or equality, per SemVer 2.0.0 §10.
+    let buildHash: String?
 
     var description: String {
         var s = "\(major).\(minor).\(patch)"
         if let pre = preRelease { s += "-\(pre)" }
+        if commitsAhead > 0, let hash = buildHash {
+            s += "-\(commitsAhead)-g\(hash)"
+        }
         return s
     }
 
-    /// Parse a version string like "v0.9.0-rc", "0.9.0", or "1.2.3-beta.1".
+    /// Parse a version string. Accepts both SemVer and git-describe forms:
+    /// - SemVer 2.0.0:   "1.2.3", "v1.2.3", "1.2.3-rc1", "1.2.3-beta.4"
+    /// - git describe:   "v0.9.1-71-g9d0c328", "1.2.3-rc1-71-g9d0c328"
+    ///
+    /// A git-describe suffix is detected by a digit-only segment
+    /// IMMEDIATELY followed by a segment of the form "g<hex>" — anything
+    /// before is treated as a SemVer pre-release tag, anything after is
+    /// dropped (e.g. trailing "-dirty" markers).
     init?(_ string: String) {
         var s = string
         if s.hasPrefix("v") || s.hasPrefix("V") { s = String(s.dropFirst()) }
 
-        let dashSplit = s.split(separator: "-", maxSplits: 1)
-        let coreParts = dashSplit[0].split(separator: ".")
+        let parts = s.split(separator: "-").map(String.init)
+        guard let core = parts.first else { return nil }
 
+        let coreParts = core.split(separator: ".")
         guard coreParts.count == 3,
               let maj = Int(coreParts[0]),
               let min = Int(coreParts[1]),
               let pat = Int(coreParts[2]) else { return nil }
 
+        // Walk suffix segments. Everything before a git-describe pair
+        // (digits + "gHEX") is the SemVer pre-release tag; the pair
+        // itself becomes commitsAhead + buildHash.
+        var preReleaseSegments: [String] = []
+        var commits = 0
+        var hash: String?
+        var i = 1
+        while i < parts.count {
+            if let n = Int(parts[i]),
+               i + 1 < parts.count,
+               Self.isGitDescribeHash(parts[i + 1]) {
+                commits = n
+                hash = String(parts[i + 1].dropFirst())  // drop leading 'g'
+                break
+            }
+            preReleaseSegments.append(parts[i])
+            i += 1
+        }
+
         major = maj
         minor = min
         patch = pat
-        preRelease = dashSplit.count > 1 ? String(dashSplit[1]) : nil
+        preRelease = preReleaseSegments.isEmpty
+            ? nil
+            : preReleaseSegments.joined(separator: "-")
+        commitsAhead = commits
+        buildHash = hash
+    }
+
+    /// Detect a git-describe abbreviated hash segment: leading "g"
+    /// followed by at least 4 hex digits. Git's default abbrev length
+    /// is 7 but auto-shortens; 4 is the lowest length git will produce.
+    private static func isGitDescribeHash(_ s: String) -> Bool {
+        guard s.count >= 5, s.first == "g" else { return false }
+        return s.dropFirst().allSatisfy { $0.isHexDigit }
+    }
+
+    static func == (lhs: SemanticVersion, rhs: SemanticVersion) -> Bool {
+        // buildHash is metadata and does NOT participate in equality
+        // (SemVer 2.0.0 §10). All other fields do.
+        return lhs.major == rhs.major
+            && lhs.minor == rhs.minor
+            && lhs.patch == rhs.patch
+            && lhs.preRelease == rhs.preRelease
+            && lhs.commitsAhead == rhs.commitsAhead
     }
 
     static func < (lhs: SemanticVersion, rhs: SemanticVersion) -> Bool {
         if lhs.major != rhs.major { return lhs.major < rhs.major }
         if lhs.minor != rhs.minor { return lhs.minor < rhs.minor }
         if lhs.patch != rhs.patch { return lhs.patch < rhs.patch }
-        // Pre-release sorts below stable at the same version
+
+        // Pre-release sorts below stable at the same MAJOR.MINOR.PATCH.
         switch (lhs.preRelease, rhs.preRelease) {
-        case (nil, nil):    return false
-        case (_, nil):      return true   // "0.9.0-rc" < "0.9.0"
-        case (nil, _):      return false  // "0.9.0" > "0.9.0-rc"
-        case (let l?, let r?): return l < r
+        case (nil, nil):
+            break                                       // fall through to commitsAhead
+        case (_, nil):
+            return true                                 // "0.9.0-rc" < "0.9.0"
+        case (nil, _):
+            return false                                // "0.9.0" > "0.9.0-rc"
+        case (let l?, let r?):
+            if l != r { return l < r }                  // tiebreak by tag name
+                                                        // equal tags: fall through
         }
+
+        // Same MAJOR.MINOR.PATCH and same pre-release tag: a build with
+        // more commits is AHEAD of the tag, hence newer. This is the
+        // critical inversion vs SemVer pre-release semantics — see the
+        // commitsAhead doc comment.
+        return lhs.commitsAhead < rhs.commitsAhead
     }
 }
 
