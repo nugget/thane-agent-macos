@@ -3,9 +3,12 @@ import os
 
 // MARK: - Semantic Version
 
-/// Kept nonisolated so it can be parsed and compared from background
-/// tasks (the GitHub poll runs off the main actor) without forcing
-/// hops back into the @MainActor UpdateManager.
+/// Marked `nonisolated` so the test target — which runs under the
+/// project's default-MainActor isolation — can call the initializer
+/// and the `Comparable`/`Equatable` conformances without actor hops.
+/// Without this, `xcodebuild test` rejects every reference to the
+/// struct with "Main actor-isolated ... can not be referenced from
+/// a nonisolated context."
 nonisolated struct SemanticVersion: Comparable, CustomStringConvertible, Sendable {
     let major: Int
     let minor: Int
@@ -63,7 +66,11 @@ nonisolated struct SemanticVersion: Comparable, CustomStringConvertible, Sendabl
         var hash: String?
         var i = 1
         while i < parts.count {
-            if let n = Int(parts[i]),
+            // `Int(_:)` accepts a leading "+" or "-", but `git describe`
+            // never emits a signed or negative commit count — reject it
+            // so we don't end up with negative `commitsAhead` skewing the
+            // ordering comparison.
+            if let n = Int(parts[i]), n >= 0,
                i + 1 < parts.count,
                Self.isGitDescribeHash(parts[i + 1]) {
                 commits = n
