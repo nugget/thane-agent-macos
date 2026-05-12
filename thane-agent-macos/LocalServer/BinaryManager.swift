@@ -26,12 +26,12 @@ nonisolated struct LocalThaneConfig {
     var nativePort: Int = 8080
     var ollamaPort: Int = 11434
     /// Whether the companion WebSocket endpoint is enabled in the parsed
-    /// config. Sourced from either the canonical `companion:` block or
-    /// the legacy `platform:` block.
+    /// config. Sourced from the `companion.enabled` key.
     var companionEnabled: Bool = false
-    /// First token discovered for connecting as a companion provider.
-    /// Pulled from `companion.providers.<name>.tokens[0]` (preferred) or
-    /// `platform.tokens[0]` (legacy fallback).
+    /// First token discovered under `companion.providers.<name>.tokens`.
+    /// The server's tokenIndex resolves any valid token to the correct
+    /// account, so the macOS app doesn't need to know which provider it
+    /// represents.
     var companionToken: String? = nil
 
     static let defaults = LocalThaneConfig()
@@ -50,32 +50,17 @@ nonisolated struct LocalThaneConfig {
     /// Parse a config.yaml string. Uses a simple line-based approach —
     /// no YAML library required.
     ///
-    /// Recognizes two shapes for the companion endpoint:
-    ///   companion:                  (canonical)
+    /// Recognized companion shape:
+    ///   companion:
     ///     enabled: true
     ///     providers:
     ///       <account>:
     ///         tokens:
     ///         - <token>
-    ///
-    ///   platform:                   (legacy fallback)
-    ///     enabled: true
-    ///     tokens:
-    ///     - <token>
-    ///
-    /// When both are present, `companion:` wins for both `enabled` and the
-    /// first token — `platform:` only fills in fields the new block left unset.
     static func parse(yaml content: String) -> LocalThaneConfig {
         var result = LocalThaneConfig()
         var topSection = ""
         var inTokensList = false
-
-        // Track new vs legacy separately so the canonical companion:
-        // block always wins when both are present, regardless of file order.
-        var enabledFromCompanion: Bool?
-        var enabledFromPlatform: Bool?
-        var tokenFromCompanion: String?
-        var tokenFromPlatform: String?
 
         for line in content.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
@@ -97,32 +82,16 @@ nonisolated struct LocalThaneConfig {
                 if let p = parseYAMLPort(trimmed) { result.ollamaPort = p }
 
             case "companion":
-                // The new shape has `tokens:` nested under each provider.
-                // The flat line scan handles this transparently — we keep
-                // only the first token, no matter which provider it came from,
-                // because the server's tokenIndex resolves any valid token to
-                // the correct account.
-                if trimmed == "enabled: true"  { enabledFromCompanion = true }
-                if trimmed == "enabled: false" { enabledFromCompanion = false }
+                // `tokens:` lines appear once per provider in the new shape;
+                // the flat line scan handles that transparently — we keep
+                // only the first token seen.
+                if trimmed == "enabled: true"  { result.companionEnabled = true }
+                if trimmed == "enabled: false" { result.companionEnabled = false }
                 if trimmed == "tokens:" {
                     inTokensList = true
                 } else if inTokensList && trimmed.hasPrefix("- ") {
-                    if tokenFromCompanion == nil {
-                        tokenFromCompanion = extractYAMLListValue(trimmed)
-                    }
-                } else if inTokensList && !trimmed.hasPrefix("- ") {
-                    inTokensList = false
-                }
-
-            case "platform":
-                // Legacy shape: flat `tokens:` list under `platform:`.
-                if trimmed == "enabled: true"  { enabledFromPlatform = true }
-                if trimmed == "enabled: false" { enabledFromPlatform = false }
-                if trimmed == "tokens:" {
-                    inTokensList = true
-                } else if inTokensList && trimmed.hasPrefix("- ") {
-                    if tokenFromPlatform == nil {
-                        tokenFromPlatform = extractYAMLListValue(trimmed)
+                    if result.companionToken == nil {
+                        result.companionToken = extractYAMLListValue(trimmed)
                     }
                 } else if inTokensList && !trimmed.hasPrefix("- ") {
                     inTokensList = false
@@ -132,8 +101,6 @@ nonisolated struct LocalThaneConfig {
             }
         }
 
-        result.companionEnabled = enabledFromCompanion ?? enabledFromPlatform ?? false
-        result.companionToken = tokenFromCompanion ?? tokenFromPlatform
         return result
     }
 
