@@ -19,9 +19,11 @@ import os
 /// Subset of thane's config.yaml relevant to the macOS app.
 /// Parsed on a best-effort basis — always falls back to defaults.
 ///
-/// `nonisolated` so the parser can be exercised from background contexts
-/// (and from tests under the default-MainActor test target) without
-/// forcing actor hops.
+/// Marked `nonisolated` so the test target — which runs under the
+/// project's default-MainActor isolation — can call `parse(...)` and
+/// read fields without actor hops. Without this, `xcodebuild test`
+/// rejects every reference with "Main actor-isolated ... can not be
+/// referenced from a nonisolated context."
 nonisolated struct LocalThaneConfig {
     var nativePort: Int = 8080
     var ollamaPort: Int = 11434

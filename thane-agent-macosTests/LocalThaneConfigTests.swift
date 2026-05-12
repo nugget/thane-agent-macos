@@ -1,4 +1,3 @@
-import Foundation
 import Testing
 @testable import thane_agent_macos
 
@@ -13,15 +12,14 @@ struct LocalThaneConfigTests {
     // MARK: - Fixtures
 
     /// Each row is a self-contained scenario: a YAML snippet plus the
-    /// fields we assert on. Mirrors how AppState reads the parsed config.
+    /// fields we assert on. Mirrors how AppState reads the parsed config —
+    /// `AppState.connectLocal()` gates on `companionEnabled && companionToken != nil`,
+    /// so each case's "would connect" outcome is implied by the pair.
     struct Case: Sendable {
         let name: String
         let yaml: String
         let expectEnabled: Bool
         let expectToken: String?
-        /// Whether `AppState.connectLocal()`'s gate
-        /// (`companionEnabled && companionToken != nil`) would pass.
-        var expectWouldConnect: Bool { expectEnabled && expectToken != nil }
     }
 
     static let cases: [Case] = [
