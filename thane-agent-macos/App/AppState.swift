@@ -166,12 +166,14 @@ final class AppState {
         connection.disconnect()
     }
 
-    /// Connect the platform WebSocket to the locally running binary.
-    /// Reads ports and token from the parsed config — no-ops if platform isn't configured.
+    /// Register with the locally running binary as a companion provider.
+    /// Reads the native port and token from the parsed config — no-ops if
+    /// the companion endpoint isn't configured (or is configured but
+    /// missing a usable token).
     func connectLocal() {
         let config = binaryManager.localConfig
-        guard config.platformEnabled, let token = config.platformToken else {
-            logger.info("Local binary running but platform not configured in config — WebSocket skipped")
+        guard config.companionEnabled, let token = config.companionToken else {
+            logger.info("Local binary running but companion not configured in config — WebSocket skipped")
             return
         }
         guard let url = URL(string: "http://localhost:\(config.nativePort)") else { return }
