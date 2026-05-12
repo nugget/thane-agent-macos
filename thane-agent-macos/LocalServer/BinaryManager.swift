@@ -18,13 +18,107 @@ import os
 /// restarting.
 /// Subset of thane's config.yaml relevant to the macOS app.
 /// Parsed on a best-effort basis — always falls back to defaults.
-struct LocalThaneConfig {
+///
+/// Marked `nonisolated` so the test target — which runs under the
+/// project's default-MainActor isolation — can call `parse(...)` and
+/// read fields without actor hops. Without this, `xcodebuild test`
+/// rejects every reference with "Main actor-isolated ... can not be
+/// referenced from a nonisolated context."
+nonisolated struct LocalThaneConfig {
     var nativePort: Int = 8080
     var ollamaPort: Int = 11434
-    var platformEnabled: Bool = false
-    var platformToken: String? = nil
+    /// Whether the companion WebSocket endpoint is enabled in the parsed
+    /// config. Sourced from the `companion.enabled` key.
+    var companionEnabled: Bool = false
+    /// First token discovered under `companion.providers.<name>.tokens`.
+    /// The server's tokenIndex resolves any valid token to the correct
+    /// account, so the macOS app doesn't need to know which provider it
+    /// represents.
+    var companionToken: String? = nil
 
     static let defaults = LocalThaneConfig()
+
+    // MARK: - Parsing
+
+    /// Parse the subset of thane's config.yaml that the macOS app needs.
+    /// Returns `.defaults` if the file is missing or unreadable.
+    static func parse(at url: URL) -> LocalThaneConfig {
+        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
+            return .defaults
+        }
+        return parse(yaml: content)
+    }
+
+    /// Parse a config.yaml string. Uses a simple line-based approach —
+    /// no YAML library required.
+    ///
+    /// Recognized companion shape:
+    ///   companion:
+    ///     enabled: true
+    ///     providers:
+    ///       <account>:
+    ///         tokens:
+    ///         - <token>
+    static func parse(yaml content: String) -> LocalThaneConfig {
+        var result = LocalThaneConfig()
+        var topSection = ""
+        var inTokensList = false
+
+        for line in content.components(separatedBy: .newlines) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.hasPrefix("#"), !trimmed.isEmpty else { continue }
+            let indent = line.prefix(while: { $0 == " " }).count
+
+            // Top-level section key
+            if indent == 0 && trimmed.hasSuffix(":") && !trimmed.contains(" ") {
+                topSection = String(trimmed.dropLast())
+                inTokensList = false
+                continue
+            }
+
+            switch topSection {
+            case "listen":
+                if let p = parseYAMLPort(trimmed) { result.nativePort = p }
+
+            case "ollama_api":
+                if let p = parseYAMLPort(trimmed) { result.ollamaPort = p }
+
+            case "companion":
+                // `tokens:` lines appear once per provider in the new shape;
+                // the flat line scan handles that transparently — we keep
+                // only the first token seen.
+                if trimmed == "enabled: true"  { result.companionEnabled = true }
+                if trimmed == "enabled: false" { result.companionEnabled = false }
+                if trimmed == "tokens:" {
+                    inTokensList = true
+                } else if inTokensList && trimmed.hasPrefix("- ") {
+                    if result.companionToken == nil {
+                        result.companionToken = extractYAMLListValue(trimmed)
+                    }
+                } else if inTokensList && !trimmed.hasPrefix("- ") {
+                    inTokensList = false
+                }
+
+            default: break
+            }
+        }
+
+        return result
+    }
+
+    private static func parseYAMLPort(_ trimmed: String) -> Int? {
+        guard trimmed.hasPrefix("port:") else { return nil }
+        return Int(trimmed.dropFirst("port:".count).trimmingCharacters(in: .whitespaces))
+    }
+
+    private static func extractYAMLListValue(_ trimmed: String) -> String? {
+        var value = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
+        if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
+           (value.hasPrefix("'")  && value.hasSuffix("'")) {
+            value = String(value.dropFirst().dropLast())
+        }
+        return value.isEmpty ? nil : value
+    }
 }
 
 @Observable
@@ -255,7 +349,7 @@ final class BinaryManager {
         state = .starting
         detectedVersion = nil
         lastCPUSample = nil
-        localConfig = Self.parseConfig(at: configURL ?? workspaceURL.appending(path: "config.yaml"))
+        localConfig = LocalThaneConfig.parse(at: configURL ?? workspaceURL.appending(path: "config.yaml"))
 
         let proc = Process()
         proc.executableURL = url
@@ -630,69 +724,6 @@ final class BinaryManager {
         processStats = stats
     }
 
-    // MARK: - Config Parsing
-
-    /// Parse the subset of thane's config.yaml that the macOS app needs.
-    /// Uses a simple line-based approach — no YAML library required.
-    static func parseConfig(at url: URL) -> LocalThaneConfig {
-        guard let content = try? String(contentsOf: url, encoding: .utf8) else {
-            return .defaults
-        }
-        var result = LocalThaneConfig()
-        var topSection = ""
-        var inTokensList = false
-
-        for line in content.components(separatedBy: .newlines) {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.hasPrefix("#"), !trimmed.isEmpty else { continue }
-            let indent = line.prefix(while: { $0 == " " }).count
-
-            // Top-level section key
-            if indent == 0 && trimmed.hasSuffix(":") && !trimmed.contains(" ") {
-                topSection = String(trimmed.dropLast())
-                inTokensList = false
-                continue
-            }
-
-            switch topSection {
-            case "listen":
-                if let p = parseYAMLPort(trimmed) { result.nativePort = p }
-
-            case "ollama_api":
-                if let p = parseYAMLPort(trimmed) { result.ollamaPort = p }
-
-            case "platform":
-                if trimmed == "enabled: true"  { result.platformEnabled = true }
-                if trimmed == "enabled: false" { result.platformEnabled = false }
-                if trimmed == "tokens:" {
-                    inTokensList = true
-                } else if inTokensList && trimmed.hasPrefix("- ") {
-                    if result.platformToken == nil {
-                        result.platformToken = extractYAMLListValue(trimmed)
-                    }
-                } else if inTokensList && !trimmed.hasPrefix("- ") {
-                    inTokensList = false
-                }
-
-            default: break
-            }
-        }
-        return result
-    }
-
-    private static func parseYAMLPort(_ trimmed: String) -> Int? {
-        guard trimmed.hasPrefix("port:") else { return nil }
-        return Int(trimmed.dropFirst("port:".count).trimmingCharacters(in: .whitespaces))
-    }
-
-    private static func extractYAMLListValue(_ trimmed: String) -> String? {
-        var value = String(trimmed.dropFirst(2)).trimmingCharacters(in: .whitespaces)
-        if (value.hasPrefix("\"") && value.hasSuffix("\"")) ||
-           (value.hasPrefix("'")  && value.hasSuffix("'")) {
-            value = String(value.dropFirst().dropLast())
-        }
-        return value.isEmpty ? nil : value
-    }
 }
 
 // MARK: - Directory Watcher
