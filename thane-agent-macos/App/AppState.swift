@@ -14,9 +14,11 @@ final class AppState {
     let appUpdateManager = AppUpdateManager()
     let permissionsManager = PermissionsManager()
     let calendarService = CalendarService()
+    let contactsService = ContactsService()
 
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "app")
     private(set) var calendarAuthorization: CalendarAuthorizationState = .notDetermined
+    private(set) var contactsAuthorization: ContactsAuthorizationState = .notDetermined
 
 
     var connectionState: ServerConnection.State {
@@ -79,6 +81,10 @@ final class AppState {
             capability: "macos.calendar",
             handler: CalendarPlatformHandler(calendarService: calendarService)
         )
+        platformRouter.register(
+            capability: "macos.contacts",
+            handler: ContactsPlatformHandler(contactsService: contactsService)
+        )
         connection.registeredCapabilities = platformRouter.capabilities
 
         connection.onPlatformRequest = { [weak self] request in
@@ -109,6 +115,7 @@ final class AppState {
 
         Task {
             await refreshCalendarAuthorization()
+            await refreshContactsAuthorization()
         }
 
         binaryManager.autoStartIfNeeded()
@@ -214,6 +221,19 @@ final class AppState {
         } catch {
             logger.error("Failed to request calendar access: \(error.localizedDescription)")
             calendarAuthorization = await calendarService.authorizationState()
+        }
+    }
+
+    func refreshContactsAuthorization() async {
+        contactsAuthorization = await contactsService.authorizationState()
+    }
+
+    func requestContactsAccess() async {
+        do {
+            contactsAuthorization = try await contactsService.requestAccessIfNeeded()
+        } catch {
+            logger.error("Failed to request contacts access: \(error.localizedDescription)")
+            contactsAuthorization = await contactsService.authorizationState()
         }
     }
 }

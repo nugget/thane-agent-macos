@@ -286,10 +286,11 @@ struct PermissionsSettingsView: View {
         Form {
             Section {
                 calendarRow
+                contactsRow
             } header: {
                 Text("Private Data")
             } footer: {
-                Text("Calendar access powers the macOS calendar tool exposed back to a connected Thane server.")
+                Text("These grants power the macOS platform tools exposed back to a connected Thane server.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -353,6 +354,7 @@ struct PermissionsSettingsView: View {
         .onAppear {
             Task {
                 await appState.refreshCalendarAuthorization()
+                await appState.refreshContactsAuthorization()
                 await manager.refreshPreviouslyRequested()
             }
         }
@@ -372,6 +374,25 @@ struct PermissionsSettingsView: View {
             VStack(alignment: .trailing, spacing: 6) {
                 calendarStatusBadge(appState.calendarAuthorization)
                 calendarActionButton(appState.calendarAuthorization)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var contactsRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Contacts")
+                Text("Contacts framework access for looking up people, phone numbers, and email addresses.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 6) {
+                contactsStatusBadge(appState.contactsAuthorization)
+                contactsActionButton(appState.contactsAuthorization)
             }
         }
         .padding(.vertical, 4)
@@ -488,6 +509,54 @@ struct PermissionsSettingsView: View {
             Button("Open Settings…") {
                 NSWorkspace.shared.open(
                     URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!
+                )
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+    }
+
+    @ViewBuilder
+    private func contactsStatusBadge(_ status: ContactsAuthorizationState) -> some View {
+        switch status {
+        case .notDetermined:
+            Text("Not Requested")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        case .fullAccess:
+            Label("Granted", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .limited:
+            Label("Limited", systemImage: "checkmark.circle")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .denied, .restricted, .unknown:
+            Label(status.label, systemImage: "xmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+    }
+
+    @ViewBuilder
+    private func contactsActionButton(_ status: ContactsAuthorizationState) -> some View {
+        switch status {
+        case .notDetermined:
+            Button("Request Access") {
+                Task { await appState.requestContactsAccess() }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        case .fullAccess, .limited, .unknown:
+            Button("Re-check") {
+                Task { await appState.refreshContactsAuthorization() }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        case .denied, .restricted:
+            Button("Open Settings…") {
+                NSWorkspace.shared.open(
+                    URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts")!
                 )
             }
             .buttonStyle(.bordered)
