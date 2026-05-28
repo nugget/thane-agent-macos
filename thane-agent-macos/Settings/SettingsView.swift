@@ -286,6 +286,7 @@ struct PermissionsSettingsView: View {
         Form {
             Section {
                 calendarRow
+                remindersRow
                 contactsRow
             } header: {
                 Text("Private Data")
@@ -355,6 +356,7 @@ struct PermissionsSettingsView: View {
             Task {
                 await appState.refreshCalendarAuthorization()
                 await appState.refreshContactsAuthorization()
+                await appState.refreshRemindersAuthorization()
                 await manager.refreshPreviouslyRequested()
             }
         }
@@ -372,8 +374,37 @@ struct PermissionsSettingsView: View {
             Spacer()
 
             VStack(alignment: .trailing, spacing: 6) {
-                calendarStatusBadge(appState.calendarAuthorization)
-                calendarActionButton(appState.calendarAuthorization)
+                eventKitStatusBadge(appState.calendarAuthorization)
+                eventKitActionButton(
+                    appState.calendarAuthorization,
+                    privacyPane: "Privacy_Calendars",
+                    onRequest: { await appState.requestCalendarAccess() },
+                    onRecheck: { await appState.refreshCalendarAuthorization() }
+                )
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var remindersRow: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Reminders")
+                Text("EventKit access for to-dos, due dates, and task lists.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 6) {
+                eventKitStatusBadge(appState.remindersAuthorization)
+                eventKitActionButton(
+                    appState.remindersAuthorization,
+                    privacyPane: "Privacy_Reminders",
+                    onRequest: { await appState.requestRemindersAccess() },
+                    onRecheck: { await appState.refreshRemindersAuthorization() }
+                )
             }
         }
         .padding(.vertical, 4)
@@ -473,7 +504,7 @@ struct PermissionsSettingsView: View {
     }
 
     @ViewBuilder
-    private func calendarStatusBadge(_ status: CalendarAuthorizationState) -> some View {
+    private func eventKitStatusBadge(_ status: EventKitAuthorizationState) -> some View {
         switch status {
         case .notDetermined:
             Text("Not Requested")
@@ -491,24 +522,29 @@ struct PermissionsSettingsView: View {
     }
 
     @ViewBuilder
-    private func calendarActionButton(_ status: CalendarAuthorizationState) -> some View {
+    private func eventKitActionButton(
+        _ status: EventKitAuthorizationState,
+        privacyPane: String,
+        onRequest: @escaping () async -> Void,
+        onRecheck: @escaping () async -> Void
+    ) -> some View {
         switch status {
         case .notDetermined:
             Button("Request Access") {
-                Task { await appState.requestCalendarAccess() }
+                Task { await onRequest() }
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
         case .fullAccess, .unknown:
             Button("Re-check") {
-                Task { await appState.refreshCalendarAuthorization() }
+                Task { await onRecheck() }
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
         case .denied, .restricted, .writeOnly:
             Button("Open Settings…") {
                 NSWorkspace.shared.open(
-                    URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Calendars")!
+                    URL(string: "x-apple.systempreferences:com.apple.preference.security?\(privacyPane)")!
                 )
             }
             .buttonStyle(.bordered)

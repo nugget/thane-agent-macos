@@ -1,51 +1,6 @@
 import EventKit
 import Foundation
 
-enum CalendarAuthorizationState: String, Equatable, Sendable {
-    case notDetermined
-    case denied
-    case restricted
-    case fullAccess
-    case writeOnly
-    case unknown
-
-    nonisolated init(status: EKAuthorizationStatus) {
-        switch status {
-        case .notDetermined:
-            self = .notDetermined
-        case .restricted:
-            self = .restricted
-        case .denied:
-            self = .denied
-        case .authorized:
-            self = .fullAccess
-        case .fullAccess:
-            self = .fullAccess
-        case .writeOnly:
-            self = .writeOnly
-        @unknown default:
-            self = .unknown
-        }
-    }
-
-    nonisolated var label: String {
-        switch self {
-        case .notDetermined:
-            "Not determined"
-        case .denied:
-            "Denied"
-        case .restricted:
-            "Restricted"
-        case .fullAccess:
-            "Full access"
-        case .writeOnly:
-            "Write only"
-        case .unknown:
-            "Unknown"
-        }
-    }
-}
-
 enum CalendarServiceError: PlatformServiceError, Sendable {
     case invalidTimestamp(String, String)
     case invalidWindow
@@ -167,11 +122,11 @@ actor CalendarService {
         self.eventTimestampFormatter = Self.makeEventTimestampFormatter()
     }
 
-    func authorizationState() -> CalendarAuthorizationState {
-        CalendarAuthorizationState(status: EKEventStore.authorizationStatus(for: .event))
+    func authorizationState() -> EventKitAuthorizationState {
+        EventKitAuthorizationState(status: EKEventStore.authorizationStatus(for: .event))
     }
 
-    func requestAccessIfNeeded() async throws -> CalendarAuthorizationState {
+    func requestAccessIfNeeded() async throws -> EventKitAuthorizationState {
         let current = authorizationState()
         guard current == .notDetermined else {
             return current
