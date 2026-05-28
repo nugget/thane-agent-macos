@@ -8,6 +8,9 @@ enum CalendarServiceError: PlatformServiceError, Sendable {
     case restricted
     case writeOnlyAccess
     case noMatchingCalendars([String])
+    case noWritableCalendar
+    case saveFailed(String)
+    case unsupportedMethod(String)
 
     nonisolated var code: String {
         switch self {
@@ -23,6 +26,12 @@ enum CalendarServiceError: PlatformServiceError, Sendable {
             "calendar_access_write_only"
         case .noMatchingCalendars:
             "calendar_not_found"
+        case .noWritableCalendar:
+            "calendar_no_writable_calendar"
+        case .saveFailed:
+            "calendar_save_failed"
+        case .unsupportedMethod:
+            "unknown_method"
         }
     }
 
@@ -40,11 +49,40 @@ enum CalendarServiceError: PlatformServiceError, Sendable {
             "Calendar access is write-only; read access is required."
         case .noMatchingCalendars(let names):
             "No matching calendars found for: \(names.joined(separator: ", "))"
+        case .noWritableCalendar:
+            "No writable calendar is available for new events."
+        case .saveFailed(let reason):
+            "Failed to save calendar event: \(reason)"
+        case .unsupportedMethod(let method):
+            "Method \(method) is not supported by macos.calendar."
         }
     }
 }
 
-struct CalendarListRequest: Codable, Equatable, Sendable {
+/// ISO8601 timestamp parsing shared by the calendar request types.
+nonisolated enum CalendarTimestamp {
+    static func parse(_ value: String, field: String) throws -> Date {
+        if let date = formatter(fractionalSeconds: false).date(from: value) {
+            return date
+        }
+        if let date = formatter(fractionalSeconds: true).date(from: value) {
+            return date
+        }
+        throw CalendarServiceError.invalidTimestamp(field, value)
+    }
+
+    private static func formatter(fractionalSeconds: Bool) -> ISO8601DateFormatter {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = fractionalSeconds
+            ? [.withInternetDateTime, .withFractionalSeconds]
+            : [.withInternetDateTime]
+        return formatter
+    }
+}
+
+// Marked `nonisolated` so the test target can decode/read these under the
+// app's MainActor-default isolation (see ContactsService for the rationale).
+nonisolated struct CalendarListRequest: Codable, Equatable, Sendable {
     let start: String
     let end: String
     let calendarNames: [String]
@@ -60,38 +98,63 @@ struct CalendarListRequest: Codable, Equatable, Sendable {
     }
 
     nonisolated func dateInterval() throws -> DateInterval {
-        let startDate = try Self.parseTimestamp(start, field: "start")
-        let endDate = try Self.parseTimestamp(end, field: "end")
+        let startDate = try CalendarTimestamp.parse(start, field: "start")
+        let endDate = try CalendarTimestamp.parse(end, field: "end")
         guard endDate > startDate else {
             throw CalendarServiceError.invalidWindow
         }
         return DateInterval(start: startDate, end: endDate)
     }
-
-    nonisolated private static func parseTimestamp(_ value: String, field: String) throws -> Date {
-        if let date = makeTimestampFormatter(fractionalSeconds: false).date(from: value) {
-            return date
-        }
-        if let date = makeTimestampFormatter(fractionalSeconds: true).date(from: value) {
-            return date
-        }
-        throw CalendarServiceError.invalidTimestamp(field, value)
-    }
-
-    nonisolated private static func makeTimestampFormatter(fractionalSeconds: Bool) -> ISO8601DateFormatter {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = fractionalSeconds
-            ? [.withInternetDateTime, .withFractionalSeconds]
-            : [.withInternetDateTime]
-        return formatter
-    }
 }
 
-struct CalendarListResponse: Codable, Equatable, Sendable {
+nonisolated struct CalendarListResponse: Codable, Equatable, Sendable {
     let events: [CalendarEventSummary]
 }
 
-struct CalendarEventSummary: Codable, Equatable, Sendable {
+// Marked `nonisolated` so the test target can decode/read these under the
+// app's MainActor-default isolation (see ContactsService for the rationale).
+nonisolated struct CalendarCreateEventRequest: Codable, Equatable, Sendable {
+    let title: String
+    let calendarName: String?
+    let start: String
+    let end: String
+    let allDay: Bool?
+    let location: String?
+    let notes: String?
+    let url: String?
+
+    enum CodingKeys: String, CodingKey {
+        case title
+        case calendarName = "calendar_name"
+        case start
+        case end
+        case allDay = "all_day"
+        case location
+        case notes
+        case url
+    }
+
+    nonisolated func dateInterval() throws -> DateInterval {
+        let startDate = try CalendarTimestamp.parse(start, field: "start")
+        let endDate = try CalendarTimestamp.parse(end, field: "end")
+        guard endDate > startDate else {
+            throw CalendarServiceError.invalidWindow
+        }
+        return DateInterval(start: startDate, end: endDate)
+    }
+}
+
+nonisolated struct CalendarCreateEventResponse: Codable, Equatable, Sendable {
+    let eventIdentifier: String
+    let event: CalendarEventSummary
+
+    enum CodingKeys: String, CodingKey {
+        case eventIdentifier = "event_identifier"
+        case event
+    }
+}
+
+nonisolated struct CalendarEventSummary: Codable, Equatable, Sendable {
     let title: String
     let calendar: String
     let start: String
@@ -194,6 +257,36 @@ actor CalendarService {
         return CalendarListResponse(events: events.map(makeSummary))
     }
 
+    func createEvent(request: CalendarCreateEventRequest) async throws -> CalendarCreateEventResponse {
+        try await ensureWriteAccess()
+
+        let interval = try request.dateInterval()
+        let calendar = try targetCalendar(named: request.calendarName)
+
+        let event = EKEvent(eventStore: store)
+        event.calendar = calendar
+        event.title = request.title
+        event.startDate = interval.start
+        event.endDate = interval.end
+        event.isAllDay = request.allDay ?? false
+        event.location = Self.normalizedOrNil(request.location)
+        event.notes = Self.normalizedOrNil(request.notes)
+        if let urlString = Self.normalizedOrNil(request.url) {
+            event.url = URL(string: urlString)
+        }
+
+        do {
+            try store.save(event, span: .thisEvent, commit: true)
+        } catch {
+            throw CalendarServiceError.saveFailed(error.localizedDescription)
+        }
+
+        return CalendarCreateEventResponse(
+            eventIdentifier: event.eventIdentifier ?? "",
+            event: makeSummary(event: event)
+        )
+    }
+
     private func ensureReadAccess() async throws {
         switch authorizationState() {
         case .fullAccess:
@@ -212,6 +305,39 @@ actor CalendarService {
         case .unknown:
             throw CalendarServiceError.accessDenied
         }
+    }
+
+    private func ensureWriteAccess() async throws {
+        switch authorizationState() {
+        case .fullAccess, .writeOnly:
+            return
+        case .notDetermined:
+            let updatedState = try await requestAccessIfNeeded()
+            guard updatedState == .fullAccess || updatedState == .writeOnly else {
+                throw CalendarServiceError.accessDenied
+            }
+        case .denied:
+            throw CalendarServiceError.accessDenied
+        case .restricted:
+            throw CalendarServiceError.restricted
+        case .unknown:
+            throw CalendarServiceError.accessDenied
+        }
+    }
+
+    private func targetCalendar(named name: String?) throws -> EKCalendar {
+        if let trimmed = Self.normalizedOrNil(name) {
+            let normalized = trimmed.lowercased()
+            if let match = store.calendars(for: .event).first(where: { $0.title.lowercased() == normalized }) {
+                return match
+            }
+            throw CalendarServiceError.noMatchingCalendars([trimmed])
+        }
+
+        guard let defaultCalendar = store.defaultCalendarForNewEvents else {
+            throw CalendarServiceError.noWritableCalendar
+        }
+        return defaultCalendar
     }
 
     private func selectedCalendars(named names: [String]) throws -> [EKCalendar]? {
@@ -291,7 +417,7 @@ actor CalendarService {
 
 struct CalendarPlatformHandler: PlatformServiceHandler {
     let version = "1"
-    let supportedMethods = ["list_events"]
+    let supportedMethods = ["list_events", "create_event"]
 
     private let calendarService: CalendarService
 
@@ -300,8 +426,15 @@ struct CalendarPlatformHandler: PlatformServiceHandler {
     }
 
     func handle(method: String, params: [String: AnyCodable]) async throws -> AnyCodable {
-        let request = try decodePlatformParams(CalendarListRequest.self, from: params)
-        let response = try await calendarService.listEvents(request: request)
-        return try AnyCodable.fromEncodable(response)
+        switch method {
+        case "list_events":
+            let request = try decodePlatformParams(CalendarListRequest.self, from: params)
+            return try AnyCodable.fromEncodable(try await calendarService.listEvents(request: request))
+        case "create_event":
+            let request = try decodePlatformParams(CalendarCreateEventRequest.self, from: params)
+            return try AnyCodable.fromEncodable(try await calendarService.createEvent(request: request))
+        default:
+            throw CalendarServiceError.unsupportedMethod(method)
+        }
     }
 }
