@@ -15,10 +15,12 @@ final class AppState {
     let permissionsManager = PermissionsManager()
     let calendarService = CalendarService()
     let contactsService = ContactsService()
+    let remindersService = RemindersService()
 
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "app")
-    private(set) var calendarAuthorization: CalendarAuthorizationState = .notDetermined
+    private(set) var calendarAuthorization: EventKitAuthorizationState = .notDetermined
     private(set) var contactsAuthorization: ContactsAuthorizationState = .notDetermined
+    private(set) var remindersAuthorization: EventKitAuthorizationState = .notDetermined
 
 
     var connectionState: ServerConnection.State {
@@ -85,6 +87,10 @@ final class AppState {
             capability: "macos.contacts",
             handler: ContactsPlatformHandler(contactsService: contactsService)
         )
+        platformRouter.register(
+            capability: "macos.reminders",
+            handler: RemindersPlatformHandler(remindersService: remindersService)
+        )
         connection.registeredCapabilities = platformRouter.capabilities
 
         connection.onPlatformRequest = { [weak self] request in
@@ -116,6 +122,7 @@ final class AppState {
         Task {
             await refreshCalendarAuthorization()
             await refreshContactsAuthorization()
+            await refreshRemindersAuthorization()
         }
 
         binaryManager.autoStartIfNeeded()
@@ -234,6 +241,19 @@ final class AppState {
         } catch {
             logger.error("Failed to request contacts access: \(error.localizedDescription)")
             contactsAuthorization = await contactsService.authorizationState()
+        }
+    }
+
+    func refreshRemindersAuthorization() async {
+        remindersAuthorization = await remindersService.authorizationState()
+    }
+
+    func requestRemindersAccess() async {
+        do {
+            remindersAuthorization = try await remindersService.requestAccessIfNeeded()
+        } catch {
+            logger.error("Failed to request reminders access: \(error.localizedDescription)")
+            remindersAuthorization = await remindersService.authorizationState()
         }
     }
 }

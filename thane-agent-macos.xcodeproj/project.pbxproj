@@ -406,6 +406,7 @@
 				INFOPLIST_KEY_NSCalendarsUsageDescription = "Thane needs calendar access to answer scheduling queries from a connected agent.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Thane needs contacts access to answer lookup queries from a connected agent.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "Thane needs reminders access to answer task and to-do queries from a connected agent.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -440,6 +441,7 @@
 				INFOPLIST_KEY_NSCalendarsUsageDescription = "Thane needs calendar access to answer scheduling queries from a connected agent.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Thane needs contacts access to answer lookup queries from a connected agent.";
 				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				INFOPLIST_KEY_NSRemindersFullAccessUsageDescription = "Thane needs reminders access to answer task and to-do queries from a connected agent.";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
