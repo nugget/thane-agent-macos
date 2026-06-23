@@ -665,11 +665,11 @@ final class BinaryManager {
         statsTask?.cancel()
         statsTask = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.collectStats(pid: pid)
+                self?.collectStats(pid: pid)
                 // Also prune the crash window so Degraded / Crash Loop state
                 // decays when the process stabilizes, instead of staying sticky
                 // until the next crash.
-                await self?.pruneStaleCrashes()
+                self?.pruneStaleCrashes()
                 do { try await Task.sleep(for: .seconds(3)) } catch { break }
             }
         }
