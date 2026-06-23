@@ -318,6 +318,29 @@ struct ContactsPlatformHandler: PlatformServiceHandler {
     let version = "1"
     let supportedMethods = ["search_contacts"]
 
+    let toolDefinitions: [PlatformToolDefinition] = [
+        .make(
+            name: "macos_contacts_search",
+            description: "Search the user's macOS Contacts by name, organization, email, or phone number. Omit query to list all contacts, bounded by limit. Served by a connected macOS companion app.",
+            method: "search_contacts",
+            schemaJSON: """
+            {
+              "type": "object",
+              "properties": {
+                "query": {
+                  "type": "string",
+                  "description": "Case-insensitive term matched against name, organization, email, and phone. Omit to return all contacts (bounded by limit)."
+                },
+                "limit": {
+                  "type": "integer",
+                  "description": "Maximum number of contacts to return."
+                }
+              }
+            }
+            """
+        ),
+    ]
+
     private let contactsService: ContactsService
 
     init(contactsService: ContactsService) {

@@ -440,6 +440,50 @@ struct CalendarPlatformHandler: PlatformServiceHandler {
     let version = "1"
     let supportedMethods = ["list_events", "create_event"]
 
+    // Only the read tool (list_events) is authored. create_event stays a
+    // supported method but is intentionally not exposed as an LLM tool until
+    // the operator read/write policy lands; advertising no write tool is how
+    // a read-only posture is enforced. The tool keeps the established
+    // macos_calendar_events name so it shadows the server's legacy hand-coded
+    // tool (and inherits its prose result formatting) rather than adding a
+    // second calendar tool.
+    let toolDefinitions: [PlatformToolDefinition] = [
+        .make(
+            name: "macos_calendar_events",
+            description: "List events from the user's macOS Calendar within a time window. Served by a connected macOS companion app.",
+            method: "list_events",
+            schemaJSON: """
+            {
+              "type": "object",
+              "properties": {
+                "start": {
+                  "type": "string",
+                  "description": "Required. Inclusive start of the window, RFC3339 (e.g. 2026-06-23T00:00:00Z)."
+                },
+                "end": {
+                  "type": "string",
+                  "description": "Required. Exclusive end of the window, RFC3339."
+                },
+                "calendar_names": {
+                  "type": "array",
+                  "items": {"type": "string"},
+                  "description": "Calendar display names to include. Omit for all calendars."
+                },
+                "query": {
+                  "type": "string",
+                  "description": "Case-insensitive term matched against event title, location, and notes."
+                },
+                "limit": {
+                  "type": "integer",
+                  "description": "Maximum number of events to return."
+                }
+              },
+              "required": ["start", "end"]
+            }
+            """
+        ),
+    ]
+
     private let calendarService: CalendarService
 
     init(calendarService: CalendarService) {
