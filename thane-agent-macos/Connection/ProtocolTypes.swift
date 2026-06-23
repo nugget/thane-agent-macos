@@ -96,6 +96,12 @@ nonisolated struct PlatformToolDefinition: Codable, Sendable {
     /// A unit test decodes every schema and round-trips an example payload
     /// through the paired `Codable` request struct, so a malformed literal
     /// fails CI rather than shipping a broken tool.
+    ///
+    /// The schema literals are compile-time constants, so a malformed or
+    /// empty one is a programmer error, not runtime input. It traps via
+    /// `preconditionFailure` — which is enforced in release builds too — so
+    /// a bad literal can never silently advertise an invalid tool to the
+    /// server. (`assertionFailure` would be compiled out of release.)
     static func make(
         name: String,
         description: String,
@@ -103,13 +109,10 @@ nonisolated struct PlatformToolDefinition: Codable, Sendable {
         tags: [String]? = nil,
         schemaJSON: String
     ) -> PlatformToolDefinition {
-        let schema: [String: AnyCodable]
-        if let data = schemaJSON.data(using: .utf8),
-           let decoded = try? JSONDecoder().decode([String: AnyCodable].self, from: data) {
-            schema = decoded
-        } else {
-            assertionFailure("invalid tool schema JSON for \(name)")
-            schema = [:]
+        guard let data = schemaJSON.data(using: .utf8),
+              let schema = try? JSONDecoder().decode([String: AnyCodable].self, from: data),
+              !schema.isEmpty else {
+            preconditionFailure("invalid or empty tool schema JSON for \(name)")
         }
         return PlatformToolDefinition(
             name: name,
