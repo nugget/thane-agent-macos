@@ -156,9 +156,15 @@ enum UpdateState: Equatable {
     case available(version: String)
     case downloading(progress: Double)
     case verifying
+    case validatingConfig
     case installing
     case installed(version: String)
     case failed(message: String)
+    /// The staged binary rejected the active config during pre-cutover
+    /// validation. The running binary is left untouched (no swap); the
+    /// reason is the validator's own error, surfaced in the UI so the
+    /// operator can fix the config instead of falling into a crash-loop.
+    case blocked(reason: String)
 }
 
 // MARK: - Update Manager
@@ -377,6 +383,22 @@ final class UpdateManager {
             throw UpdateError.binaryNotFoundInArchive
         }
 
+        // Validate the active config against the STAGED binary before the
+        // cutover. A release can rename or retire config keys, and the
+        // running binary would happily validate the now-stale config — only
+        // the new binary knows the new rules. The staged binary is already
+        // SHA-256 + notarization verified at this point, so executing it is
+        // safe. If it rejects the config, abort the install and leave the
+        // running binary serving, instead of swapping into a crash-loop that
+        // dies before thane's logging even initializes.
+        state = .validatingConfig
+        try Task.checkCancellation()
+        if case .invalid(let reason) = try await validateStagedConfig(binary: binaryPath, binaryManager: binaryManager) {
+            logger.error("Update blocked: staged binary rejected the active config — \(reason)")
+            state = .blocked(reason: reason)
+            return
+        }
+
         // Install
         state = .installing
         let installURL = BinaryManager.managedBinaryURL
@@ -418,6 +440,125 @@ final class UpdateManager {
 
         state = .installed(version: release.version.description)
         logger.info("Updated to \(release.version)")
+    }
+
+    // MARK: - Private: Config Validation Gate
+
+    private enum ConfigValidationResult {
+        case valid
+        case invalid(reason: String)
+    }
+
+    /// Run the staged binary's `validate` subcommand against the config the
+    /// running binary would load, mirroring `BinaryManager.start()`: execute
+    /// from the workspace (so thane's CWD-based discovery matches) and pass
+    /// `-config` only when an explicit path is configured.
+    ///
+    /// Fail-open for binaries that predate `validate`: when the staged binary
+    /// returns no parseable JSON report, the gate is skipped (the update
+    /// proceeds) rather than wedging on an ambiguous non-zero exit. Only a
+    /// parseable `{"valid": false}` report blocks the cutover.
+    private func validateStagedConfig(binary: URL, binaryManager: BinaryManager) async throws -> ConfigValidationResult {
+        let workspace = binaryManager.workspaceURL
+        let explicitConfig = binaryManager.configURL
+
+        var args: [String] = []
+        if let configPath = explicitConfig?.path {
+            args += ["-config", configPath]
+        }
+        args += ["validate", "-o", "json"]
+
+        let outcome = try await Task.detached(priority: .userInitiated) {
+            try Self.runStagedProcess(executable: binary, arguments: args, workingDirectory: workspace)
+        }.value
+
+        guard let report = Self.parseValidateReport(outcome.stdout) else {
+            // No structured report: the staged binary likely predates the
+            // `validate` subcommand, or it failed in an unexpected way. Don't
+            // block the update on an ambiguous signal — proceed, but note it.
+            if outcome.exitCode != 0 {
+                logger.warning("Staged binary returned no validate report (exit \(outcome.exitCode)); proceeding without the config gate")
+            }
+            return .valid
+        }
+        if report.valid {
+            return .valid
+        }
+        let reason = report.error.flatMap { $0.isEmpty ? nil : $0 }
+            ?? "The new version rejected the current config."
+        return .invalid(reason: reason)
+    }
+
+    /// Output of a staged-binary subprocess run.
+    nonisolated private struct StagedProcessOutcome: Sendable {
+        let exitCode: Int32
+        let stdout: String
+        let stderr: String
+    }
+
+    /// Run an executable to completion and capture its output. Nonisolated so
+    /// the blocking `waitUntilExit` runs off the main actor (driven from a
+    /// detached task). Output here is bounded (a single JSON report), so
+    /// reading stdout then stderr to EOF cannot deadlock.
+    nonisolated private static func runStagedProcess(
+        executable: URL,
+        arguments: [String],
+        workingDirectory: URL
+    ) throws -> StagedProcessOutcome {
+        let proc = Process()
+        proc.executableURL = executable
+        proc.currentDirectoryURL = workingDirectory
+        proc.arguments = arguments
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
+
+        // The extracted Payload binary isn't guaranteed executable until the
+        // install step's setAttributes; ensure it before running it here.
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        try proc.run()
+
+        // Drain stdout and stderr concurrently. Reading one pipe to EOF before
+        // the other can deadlock: if the process fills the unread pipe's
+        // buffer it blocks on write and never closes the pipe we're draining.
+        // stderr reads on a background queue while stdout reads here; the
+        // semaphore establishes the happens-before for errBox before we read it.
+        let errBox = StagedOutputBox()
+        let errHandle = errPipe.fileHandleForReading
+        let drained = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            errBox.data = errHandle.readDataToEndOfFile()
+            drained.signal()
+        }
+        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+        drained.wait()
+        proc.waitUntilExit()
+
+        return StagedProcessOutcome(
+            exitCode: proc.terminationStatus,
+            stdout: String(data: outData, encoding: .utf8) ?? "",
+            stderr: String(data: errBox.data, encoding: .utf8) ?? ""
+        )
+    }
+
+    /// The `thane validate -o json` report. `validate` writes this object to
+    /// stdout on both success and failure, so a parseable report is the
+    /// authoritative signal; its absence means the binary doesn't speak it.
+    nonisolated struct ValidateReport: Decodable, Equatable, Sendable {
+        let path: String?
+        let valid: Bool
+        let error: String?
+    }
+
+    /// Decode a `thane validate -o json` report from captured stdout. Returns
+    /// nil when the output isn't a validate report (empty, usage text from a
+    /// binary without the subcommand, or otherwise malformed).
+    nonisolated static func parseValidateReport(_ stdout: String) -> ValidateReport? {
+        guard let data = stdout.data(using: .utf8), !data.isEmpty else { return nil }
+        return try? JSONDecoder().decode(ValidateReport.self, from: data)
     }
 
     private func downloadFile(from url: URL) async throws -> URL {
@@ -577,6 +718,17 @@ final class UpdateManager {
             return try decoder.decode(GitHubReleaseResponse.self, from: data)
         }
     }
+}
+
+// MARK: - Staged Output Box
+
+/// Reference box for handing a drained pipe's bytes back from a background
+/// reader thread. `data` is written once on that thread and read only after a
+/// `DispatchSemaphore` signal establishes the happens-before, so the unchecked
+/// Sendable conformance is sound. Nonisolated so the background queue can touch
+/// it under the app's MainActor-default isolation.
+nonisolated private final class StagedOutputBox: @unchecked Sendable {
+    var data = Data()
 }
 
 // MARK: - Errors

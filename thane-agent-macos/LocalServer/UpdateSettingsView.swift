@@ -36,7 +36,7 @@ struct UpdateSettingsSection: View {
 
     private var isCheckDisabled: Bool {
         switch manager.state {
-        case .checking, .downloading, .verifying, .installing: true
+        case .checking, .downloading, .verifying, .validatingConfig, .installing: true
         default: false
         }
     }
@@ -113,6 +113,14 @@ struct UpdateSettingsSection: View {
                     .foregroundStyle(.secondary)
             }
 
+        case .validatingConfig:
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Validating config with the new version...")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
         case .installing:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -142,6 +150,31 @@ struct UpdateSettingsSection: View {
                     .foregroundStyle(.red)
 
                 Button("Retry") {
+                    Task {
+                        await manager.checkForUpdate(currentVersion: binaryManager.detectedVersion)
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+
+        case .blocked(let reason):
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.octagon.fill")
+                        .foregroundStyle(.orange)
+                    Text("Update held back \u{2014} config rejected")
+                        .font(.subheadline.weight(.medium))
+                }
+                Text("The new version rejected the current config, so the running version was left untouched. Fix the config, then check again.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(reason)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+
+                Button("Check Again") {
                     Task {
                         await manager.checkForUpdate(currentVersion: binaryManager.detectedVersion)
                     }
