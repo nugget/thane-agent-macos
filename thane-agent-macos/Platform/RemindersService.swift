@@ -322,6 +322,46 @@ struct RemindersPlatformHandler: PlatformServiceHandler {
     let version = "1"
     let supportedMethods = ["list_reminders"]
 
+    let toolDefinitions: [PlatformToolDefinition] = [
+        .make(
+            name: "macos_reminders_list",
+            description: "List reminders from the user's macOS Reminders, optionally filtered by list name, completion state, due-date window, or a text query. Served by a connected macOS companion app.",
+            method: "list_reminders",
+            schemaJSON: """
+            {
+              "type": "object",
+              "properties": {
+                "list_names": {
+                  "type": "array",
+                  "items": {"type": "string"},
+                  "description": "Reminder list names to include. Omit for all lists."
+                },
+                "completed": {
+                  "type": "boolean",
+                  "description": "Filter by completion: true for completed, false for incomplete. Omit for both."
+                },
+                "due_start": {
+                  "type": "string",
+                  "description": "Inclusive lower bound on due date, RFC3339. Omit for no lower bound."
+                },
+                "due_end": {
+                  "type": "string",
+                  "description": "Inclusive upper bound on due date, RFC3339. Omit for no upper bound."
+                },
+                "query": {
+                  "type": "string",
+                  "description": "Case-insensitive term matched against reminder title and notes."
+                },
+                "limit": {
+                  "type": "integer",
+                  "description": "Maximum number of reminders to return."
+                }
+              }
+            }
+            """
+        ),
+    ]
+
     private let remindersService: RemindersService
 
     init(remindersService: RemindersService) {

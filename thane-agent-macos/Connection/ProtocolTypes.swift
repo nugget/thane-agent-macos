@@ -59,6 +59,69 @@ struct Capability: Codable {
     let name: String
     let version: String
     let methods: [String]
+    /// Full LLM tool definitions this capability authors. Optional and
+    /// additive: when present, the server synthesizes one model-facing tool
+    /// per entry and dispatches it back to `method`, making this app
+    /// authoritative over the schema the model sees. When nil (the field is
+    /// omitted from the wire payload), the server falls back to its
+    /// hand-coded tools for this capability's methods. Older servers ignore
+    /// the unknown field.
+    let tools: [PlatformToolDefinition]?
+}
+
+/// A companion-authored LLM tool. `inputSchema` is a JSON Schema object used
+/// verbatim by the server as the tool's input schema, so the params the
+/// model produces are exactly what `method`'s `Codable` request struct
+/// decodes — the schema and the decoder cannot drift.
+///
+/// Keep composition keywords (oneOf/allOf/anyOf) out of the schema root: the
+/// model providers strip top-level composition before dispatch.
+nonisolated struct PlatformToolDefinition: Codable, Sendable {
+    let name: String
+    let description: String
+    let method: String
+    let tags: [String]?
+    let inputSchema: [String: AnyCodable]
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case method
+        case tags
+        case inputSchema = "input_schema"
+    }
+
+    /// Builds a definition whose input schema is authored as a JSON string
+    /// literal — readable and reviewable as the exact schema the model sees.
+    /// A unit test decodes every schema and round-trips an example payload
+    /// through the paired `Codable` request struct, so a malformed literal
+    /// fails CI rather than shipping a broken tool.
+    ///
+    /// The schema literals are compile-time constants, so a malformed or
+    /// empty one is a programmer error, not runtime input. It traps via
+    /// `preconditionFailure` — which is enforced in release builds too — so
+    /// a bad literal can never silently advertise an invalid tool to the
+    /// server. (`assertionFailure` would be compiled out of release.)
+    static func make(
+        name: String,
+        description: String,
+        method: String,
+        tags: [String]? = nil,
+        schemaJSON: String
+    ) -> PlatformToolDefinition {
+        guard let data = schemaJSON.data(using: .utf8),
+              let schema = try? JSONDecoder().decode([String: AnyCodable].self, from: data),
+              !schema.isEmpty else {
+            preconditionFailure("invalid or empty tool schema JSON for \(name)")
+        }
+        return PlatformToolDefinition(
+            name: name,
+            description: description,
+            method: method,
+            tags: tags,
+            inputSchema: schema
+        )
+    }
 }
 
 struct RegisterCapabilitiesMessage: Codable {

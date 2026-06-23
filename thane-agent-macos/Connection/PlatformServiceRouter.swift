@@ -19,7 +19,15 @@ final class PlatformServiceRouter {
     /// Returns the list of capabilities for registration with the server.
     var capabilities: [Capability] {
         handlers.map { name, handler in
-            Capability(name: name, version: handler.version, methods: handler.supportedMethods)
+            let tools = handler.toolDefinitions
+            return Capability(
+                name: name,
+                version: handler.version,
+                methods: handler.supportedMethods,
+                // Omit the field entirely when a handler authors no tools so
+                // the wire payload stays back-compatible with older servers.
+                tools: tools.isEmpty ? nil : tools
+            )
         }
     }
 
@@ -74,5 +82,12 @@ final class PlatformServiceRouter {
 protocol PlatformServiceHandler: Sendable {
     var version: String { get }
     var supportedMethods: [String] { get }
+    /// LLM tool definitions this handler authors. Defaults to none, in which
+    /// case the server uses its hand-coded tools for this capability.
+    var toolDefinitions: [PlatformToolDefinition] { get }
     func handle(method: String, params: [String: AnyCodable]) async throws -> AnyCodable
+}
+
+extension PlatformServiceHandler {
+    var toolDefinitions: [PlatformToolDefinition] { [] }
 }
