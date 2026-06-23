@@ -90,7 +90,13 @@ nonisolated enum CalendarTimestamp {
 nonisolated struct CalendarListRequest: Codable, Equatable, Sendable {
     let start: String
     let end: String
-    let calendarNames: [String]
+    // Optional, not required. The upstream agent tags this field
+    // `json:"calendar_names,omitempty"` and omits it entirely for the
+    // common "all calendars" query, so the key is absent from the wire
+    // payload. A non-optional `[String]` made JSONDecoder throw
+    // `keyNotFound` and fail every unfiltered list_events request. nil
+    // and [] are both treated as "no calendar filter" downstream.
+    let calendarNames: [String]?
     let query: String?
     let limit: Int?
 
@@ -224,7 +230,7 @@ actor CalendarService {
         try await ensureReadAccess()
 
         let interval = try request.dateInterval()
-        let calendars = try selectedCalendars(named: request.calendarNames)
+        let calendars = try selectedCalendars(named: request.calendarNames ?? [])
         let predicate = store.predicateForEvents(
             withStart: interval.start,
             end: interval.end,
