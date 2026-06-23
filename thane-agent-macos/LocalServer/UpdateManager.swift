@@ -520,14 +520,27 @@ final class UpdateManager {
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
 
         try proc.run()
+
+        // Drain stdout and stderr concurrently. Reading one pipe to EOF before
+        // the other can deadlock: if the process fills the unread pipe's
+        // buffer it blocks on write and never closes the pipe we're draining.
+        // stderr reads on a background queue while stdout reads here; the
+        // semaphore establishes the happens-before for errBox before we read it.
+        let errBox = StagedOutputBox()
+        let errHandle = errPipe.fileHandleForReading
+        let drained = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            errBox.data = errHandle.readDataToEndOfFile()
+            drained.signal()
+        }
         let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+        drained.wait()
         proc.waitUntilExit()
 
         return StagedProcessOutcome(
             exitCode: proc.terminationStatus,
             stdout: String(data: outData, encoding: .utf8) ?? "",
-            stderr: String(data: errData, encoding: .utf8) ?? ""
+            stderr: String(data: errBox.data, encoding: .utf8) ?? ""
         )
     }
 
@@ -705,6 +718,17 @@ final class UpdateManager {
             return try decoder.decode(GitHubReleaseResponse.self, from: data)
         }
     }
+}
+
+// MARK: - Staged Output Box
+
+/// Reference box for handing a drained pipe's bytes back from a background
+/// reader thread. `data` is written once on that thread and read only after a
+/// `DispatchSemaphore` signal establishes the happens-before, so the unchecked
+/// Sendable conformance is sound. Nonisolated so the background queue can touch
+/// it under the app's MainActor-default isolation.
+nonisolated private final class StagedOutputBox: @unchecked Sendable {
+    var data = Data()
 }
 
 // MARK: - Errors
