@@ -254,7 +254,11 @@ actor RemindersService {
         guard let components = reminder.dueDateComponents else {
             return nil
         }
-        return Calendar.current.date(from: components)
+        // Honor a calendar/time zone embedded in the components so the resolved
+        // instant doesn't shift for reminders anchored to another time zone.
+        // Calendar.date(from:) already respects components.timeZone when set.
+        let calendar = components.calendar ?? Calendar.current
+        return calendar.date(from: components)
     }
 
     nonisolated static func matches(reminder: EKReminder, query: String) -> Bool {
@@ -269,10 +273,17 @@ actor RemindersService {
         return haystack.contains(query)
     }
 
-    nonisolated static func formatTimestamp(_ date: Date) -> String {
+    // Shared formatter: ISO8601DateFormatter is immutable after configuration
+    // and safe for concurrent formatting, so we reuse one instance instead of
+    // allocating a new formatter per reminder summary.
+    nonisolated(unsafe) private static let timestampFormatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
-        return formatter.string(from: date)
+        return formatter
+    }()
+
+    nonisolated static func formatTimestamp(_ date: Date) -> String {
+        timestampFormatter.string(from: date)
     }
 
     nonisolated static func normalizedOrNil(_ value: String?) -> String? {

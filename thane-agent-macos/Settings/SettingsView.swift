@@ -543,9 +543,9 @@ struct PermissionsSettingsView: View {
             .controlSize(.small)
         case .denied, .restricted, .writeOnly:
             Button("Open Settings…") {
-                NSWorkspace.shared.open(
-                    URL(string: "x-apple.systempreferences:com.apple.preference.security?\(privacyPane)")!
-                )
+                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(privacyPane)") {
+                    NSWorkspace.shared.open(url)
+                }
             }
             .buttonStyle(.bordered)
             .controlSize(.small)

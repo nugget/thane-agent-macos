@@ -10,6 +10,7 @@ enum CalendarServiceError: PlatformServiceError, Sendable {
     case noMatchingCalendars([String])
     case noWritableCalendar
     case saveFailed(String)
+    case invalidURL(String)
     case unsupportedMethod(String)
 
     nonisolated var code: String {
@@ -30,6 +31,8 @@ enum CalendarServiceError: PlatformServiceError, Sendable {
             "calendar_no_writable_calendar"
         case .saveFailed:
             "calendar_save_failed"
+        case .invalidURL:
+            "invalid_url"
         case .unsupportedMethod:
             "unknown_method"
         }
@@ -53,6 +56,8 @@ enum CalendarServiceError: PlatformServiceError, Sendable {
             "No writable calendar is available for new events."
         case .saveFailed(let reason):
             "Failed to save calendar event: \(reason)"
+        case .invalidURL(let value):
+            "Invalid event URL: \(value)"
         case .unsupportedMethod(let method):
             "Method \(method) is not supported by macos.calendar."
         }
@@ -272,7 +277,10 @@ actor CalendarService {
         event.location = Self.normalizedOrNil(request.location)
         event.notes = Self.normalizedOrNil(request.notes)
         if let urlString = Self.normalizedOrNil(request.url) {
-            event.url = URL(string: urlString)
+            guard let url = URL(string: urlString) else {
+                throw CalendarServiceError.invalidURL(urlString)
+            }
+            event.url = url
         }
 
         do {
@@ -281,8 +289,15 @@ actor CalendarService {
             throw CalendarServiceError.saveFailed(error.localizedDescription)
         }
 
+        // A successful save must yield an identifier; without it the caller
+        // can't reference the event for follow-up (update/delete). Fail loudly
+        // rather than returning an empty identifier that looks like success.
+        guard let identifier = event.eventIdentifier else {
+            throw CalendarServiceError.saveFailed("event was saved but no identifier was assigned")
+        }
+
         return CalendarCreateEventResponse(
-            eventIdentifier: event.eventIdentifier ?? "",
+            eventIdentifier: identifier,
             event: makeSummary(event: event)
         )
     }
