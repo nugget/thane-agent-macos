@@ -134,7 +134,14 @@ struct PongMessage: Codable {
 // MARK: - AnyCodable
 
 /// Type-erased Codable wrapper for dynamic JSON payloads.
-struct AnyCodable: Codable, @unchecked Sendable {
+///
+/// Marked `nonisolated` so its Codable conformance carries no actor
+/// isolation under the app's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`
+/// default. Without it, the synthesized witness asserts it is running on the
+/// main actor and traps (`dispatch_assert_queue`) when encode/decode is
+/// driven from any other executor — e.g. the nonisolated test target, or any
+/// future off-main caller.
+nonisolated struct AnyCodable: Codable, @unchecked Sendable {
     let value: Any
 
     init(_ value: Any) {
@@ -192,7 +199,7 @@ struct AnyCodable: Codable, @unchecked Sendable {
     }
 }
 
-func decodePlatformParams<T: Decodable>(_ type: T.Type, from params: [String: AnyCodable]) throws -> T {
+nonisolated func decodePlatformParams<T: Decodable>(_ type: T.Type, from params: [String: AnyCodable]) throws -> T {
     let data = try JSONEncoder().encode(params)
     return try JSONDecoder().decode(type, from: data)
 }
