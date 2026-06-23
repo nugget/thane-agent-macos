@@ -117,6 +117,12 @@ nonisolated struct ContactSummary: Codable, Equatable, Sendable {
 }
 
 actor ContactsService {
+    // Bound the result set so an omitted or oversized `limit` can't return the
+    // entire address book in one request (exfiltration risk + slow on large
+    // stores). Mirrors the calendar tool's default/clamp pattern.
+    private static let defaultSearchLimit = 50
+    private static let maxSearchLimit = 200
+
     private let store: CNContactStore
 
     init(store: CNContactStore = CNContactStore()) {
@@ -165,7 +171,13 @@ actor ContactsService {
         let normalizedQuery = request.query?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        let limit = request.limit
+
+        // Always bound the result set. An omitted or non-positive limit falls
+        // back to the default page size; anything larger is clamped to the max.
+        let requestedLimit = request.limit ?? Self.defaultSearchLimit
+        let effectiveLimit = requestedLimit > 0
+            ? min(requestedLimit, Self.maxSearchLimit)
+            : Self.defaultSearchLimit
 
         let fetchRequest = CNContactFetchRequest(keysToFetch: Self.keysToFetch())
         fetchRequest.sortOrder = .userDefault
@@ -178,7 +190,7 @@ actor ContactsService {
                 return
             }
             summaries.append(summary)
-            if let limit, limit > 0, summaries.count >= limit {
+            if summaries.count >= effectiveLimit {
                 stop.pointee = true
             }
         }

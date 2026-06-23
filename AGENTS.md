@@ -99,8 +99,8 @@ Silicon.
   handshake; uses `wss://` scheme to force HTTP/1.1 upgrade for Traefik
   compatibility)
 - **Platform services** — `PlatformServiceRouter.swift` dispatches
-  requests to registered providers; `CalendarService` is the only one
-  shipping today
+  requests to registered providers; `CalendarService` and
+  `ContactsService` ship today
 - **Local server** — `BinaryManager.swift` (thane process lifecycle,
   code-signature inspection), `UpdateManager.swift` (binary updates
   from thane-ai-agent releases)

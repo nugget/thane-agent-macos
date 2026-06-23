@@ -40,10 +40,11 @@ Working today:
 Nascent:
 
 - **Calendar provider** — EventKit-backed, lightly exercised. Permission flow works; request coverage is minimal and untested at scale
+- **Contacts provider** — Contacts-framework-backed search (name, org, email, phone) with a bounded result size. Permission flow works; not yet exposed as an agent-side tool (tracked upstream in [thane-ai-agent#1017](https://github.com/nugget/thane-ai-agent/issues/1017))
 
 Not started:
 
-- Contacts, Reminders, Focus modes, Shortcuts
+- Reminders, Focus modes, Shortcuts
 
 The platform-provider architecture (`PlatformServiceRouter`, `PlatformServiceProvider` protocol) is ready to host more providers as they land.
 
@@ -105,7 +106,7 @@ Release notes and artifacts live at [Releases](https://github.com/nugget/thane-a
 - **App entry / windows** — `ThaneApp.swift`, `AppState.swift` (central `@Observable` coordinator)
 - **Local server** — `BinaryManager.swift` (process lifecycle, signature inspection), `UpdateManager.swift` (release polling, download, verify, install)
 - **Connection** — `ServerConnection.swift` (WebSocket client with auth handshake and platform request routing)
-- **Platform services** — `PlatformServiceRouter.swift` dispatches requests to registered providers (currently: `CalendarService`)
+- **Platform services** — `PlatformServiceRouter.swift` dispatches requests to registered providers (currently: `CalendarService`, `ContactsService`)
 - **Chat** — SwiftUI chat view backed by SwiftData (`Conversation`, `ChatMessage`)
 - **Process Health** — Live resource stats and code-signature summary
 
