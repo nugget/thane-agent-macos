@@ -35,6 +35,9 @@ struct ThaneApp: App {
                 .onAppear { appDelegate.appState = appState }
         }
         .modelContainer(Self.modelContainer)
+        .commands {
+            AboutCommands()
+        }
 
         MenuBarExtra {
             MenuBarView()
@@ -68,5 +71,23 @@ struct ThaneApp: App {
                 .environment(appState)
         }
         .windowResizability(.contentSize)
+    }
+}
+
+/// Replaces the standard "About" app-menu item with one that opens the custom
+/// About window. Owning this through SwiftUI's command system keeps it stable
+/// across menu rebuilds — an imperative AppKit menu mutation gets reverted the
+/// next time SwiftUI reconstructs the main menu, which is why the previous
+/// approach (rewiring the item's action in applicationDidFinishLaunching) only
+/// worked on the first invocation per launch.
+private struct AboutCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(replacing: .appInfo) {
+            Button("About Thane Agent") {
+                openWindow(id: "about")
+            }
+        }
     }
 }
