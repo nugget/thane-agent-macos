@@ -139,21 +139,12 @@ actor ContactsService {
             return current
         }
 
-        // The TCC dialog needs the main run loop to be servicing events. Use a
-        // dedicated store on the main actor so we don't send the actor-isolated
-        // store across boundaries (mirrors CalendarService).
-        let granted = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Bool, Error>) in
-            Task { @MainActor in
-                let requestStore = CNContactStore()
-                requestStore.requestAccess(for: .contacts) { granted, error in
-                    if let error {
-                        continuation.resume(throwing: error)
-                    } else {
-                        continuation.resume(returning: granted)
-                    }
-                }
-            }
-        }
+        // Present the TCC dialog from the main actor (mirrors CalendarService),
+        // using the async requestAccess so there's no completion-handler bridge
+        // and no actor-isolated store crossing the boundary.
+        let granted = try await Task { @MainActor in
+            try await CNContactStore().requestAccess(for: .contacts)
+        }.value
 
         // A grant may resolve to either full or limited access. Re-read the
         // status to distinguish; fall back to full access if tccd hasn't
