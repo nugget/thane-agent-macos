@@ -26,6 +26,13 @@ final class AppState {
     let contactsService = ContactsService()
     let remindersService = RemindersService()
 
+    // Native REST API panel managers — each polls only while its panel is visible.
+    let systemStatusManager = SystemStatusManager()
+    let sessionsManager = SessionsManager()
+    let loopsManager = LoopsManager()
+    let conversationsManager = ConversationsManager()
+    let schedulesManager = SchedulesManager()
+
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "app")
     private(set) var calendarAuthorization: EventKitAuthorizationState = .notDetermined
     private(set) var contactsAuthorization: ContactsAuthorizationState = .notDetermined
@@ -73,6 +80,7 @@ final class AppState {
     /// Called by MainView on appear to bridge SwiftUI's openWindow action to AppKit contexts.
     var openConsoleWindow: (() -> Void)?
     var openDashboardWindow: (() -> Void)?
+    var openServerWindow: (() -> Void)?
 
     /// Base URL of the currently active server — local takes priority over remote.
     /// Used by the dashboard window to load the web UI.

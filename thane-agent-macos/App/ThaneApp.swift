@@ -66,6 +66,13 @@ struct ThaneApp: App {
         .defaultSize(width: 1024, height: 768)
         .windowResizability(.contentMinSize)
 
+        Window("Server", id: "server") {
+            ServerView()
+                .environment(appState)
+        }
+        .defaultSize(width: 900, height: 600)
+        .windowResizability(.contentMinSize)
+
         Window("About Thane", id: "about") {
             AboutView()
                 .environment(appState)
