@@ -2,6 +2,15 @@ import Foundation
 import SwiftData
 import os
 
+/// Connection coordinates retained while a server is connected, so the native
+/// REST client can reuse the same base URL and token without re-reading the
+/// Keychain or re-parsing the local config.
+nonisolated struct ActiveServer: Sendable, Equatable {
+    let baseURL: URL
+    let token: String
+    let isLocal: Bool
+}
+
 /// Central application state coordinator.
 /// Owns the server connection, platform service router, and local binary manager.
 @Observable
@@ -76,6 +85,17 @@ final class AppState {
 
     /// Stored when a connection is established so dashboard can open the right URL.
     private(set) var activeServerURL: URL?
+
+    /// Connection coordinates (base URL + token) for the active server, set in
+    /// lockstep with the WebSocket connection. The source of truth for the
+    /// native REST client; nil while disconnected.
+    private(set) var activeServer: ActiveServer?
+
+    /// Authenticated client for the native REST API, or nil when disconnected.
+    var nativeClient: NativeAPIClient? {
+        guard let server = activeServer else { return nil }
+        return NativeAPIClient(baseURL: server.baseURL, token: server.token)
+    }
 
     init() {
         platformRouter.register(
@@ -163,6 +183,7 @@ final class AppState {
         }
 
         let clientName = Host.current().localizedName ?? "Mac"
+        activeServer = ActiveServer(baseURL: url, token: token, isLocal: false)
 
         connection.connect(
             url: url,
@@ -176,6 +197,7 @@ final class AppState {
     func disconnect() {
         isLocallyConnected = false
         activeServerURL = nil
+        activeServer = nil
         connection.disconnect()
     }
 
@@ -193,6 +215,7 @@ final class AppState {
         let clientName = Host.current().localizedName ?? "Mac"
         isLocallyConnected = true
         activeServerURL = url
+        activeServer = ActiveServer(baseURL: url, token: token, isLocal: true)
         connection.connect(url: url, token: token, clientID: localClientID, clientName: clientName, persist: true)
     }
 
