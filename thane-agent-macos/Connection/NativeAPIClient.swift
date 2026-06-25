@@ -44,7 +44,8 @@ nonisolated struct NativeAPIClient: Sendable {
         baseURL: URL,
         token: String?,
         path: String,
-        query: [URLQueryItem]
+        query: [URLQueryItem],
+        accept: String = "application/json"
     ) throws -> URLRequest {
         guard var components = URLComponents(
             url: baseURL.appending(path: path), resolvingAgainstBaseURL: false) else {
@@ -54,7 +55,7 @@ nonisolated struct NativeAPIClient: Sendable {
         guard let url = components.url else { throw NativeAPIError.badURL(path) }
 
         var request = URLRequest(url: url)
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(accept, forHTTPHeaderField: "Accept")
         if let token, !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -114,7 +115,8 @@ extension NativeAPIClient {
         AsyncThrowingStream(bufferingPolicy: bufferingPolicy) { continuation in
             let producer = Task {
                 do {
-                    let request = try Self.makeRequest(baseURL: baseURL, token: token, path: path, query: [])
+                    let request = try Self.makeRequest(
+                        baseURL: baseURL, token: token, path: path, query: [], accept: "text/event-stream")
                     let (bytes, response) = try await URLSession.shared.bytes(for: request)
                     guard let http = response as? HTTPURLResponse else {
                         throw NativeAPIError.invalidResponse

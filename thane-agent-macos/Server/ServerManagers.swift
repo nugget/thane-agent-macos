@@ -93,29 +93,36 @@ final class LoopsManager {
     func stop() { pollTask?.cancel(); pollTask = nil }
 
     /// Prefer the SSE lifecycle stream as a low-latency wake signal — re-fetch the
-    /// full list on each event. The stream is chatty, so two mechanisms keep
-    /// re-fetches sane: `.bufferingNewest(1)` collapses a burst to the latest
-    /// event, and a ~1s throttle caps `/v1/loops` re-fetches at roughly once a
-    /// second while staying responsive (and still firing one trailing refresh
-    /// after a burst). Falls back to fixed-interval polling if the stream is
-    /// unavailable or ends.
+    /// full list on each event. The stream is chatty, so `.bufferingNewest(1)`
+    /// collapses bursts to the latest event and a ~1s throttle caps re-fetches at
+    /// roughly once a second (still firing one trailing refresh after a burst).
+    ///
+    /// The outer loop re-reads the client each cycle and re-opens the stream after
+    /// a drop (3s backoff), so a reconnect to a different server/token is picked up
+    /// rather than left listening to the old one; it also refreshes once per cycle,
+    /// so a missing stream degrades to ~3s polling. All sleeps are
+    /// cancellation-aware so `stop()` shuts the task down promptly.
     private func run(_ client: @escaping @MainActor () -> NativeAPIClient?) async {
         await refresh(client())
-        if let api = client() {
+        while !Task.isCancelled {
+            guard let api = client() else { return }
             do {
                 for try await _ in api.stream("v1/loops/events", as: LoopEvent.self, bufferingPolicy: .bufferingNewest(1)) {
                     if Task.isCancelled { return }
+                    // Abandon a stream bound to a server we're no longer on; the
+                    // outer loop re-opens against the current client.
+                    if client()?.baseURL != api.baseURL { break }
                     await refresh(client())
-                    try? await Task.sleep(for: .seconds(1))
+                    try await Task.sleep(for: .seconds(1))
                 }
+            } catch is CancellationError {
+                return
             } catch {
-                if Task.isCancelled { return }
-                serverLog.error("loops stream ended, falling back to polling: \(error.localizedDescription, privacy: .public)")
+                serverLog.error("loops stream error, will retry: \(error.localizedDescription, privacy: .public)")
             }
-        }
-        while !Task.isCancelled {
+            if Task.isCancelled { return }
             await refresh(client())
-            do { try await Task.sleep(for: .seconds(3)) } catch { break }
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
         }
     }
 

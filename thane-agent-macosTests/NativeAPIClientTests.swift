@@ -26,6 +26,12 @@ struct NativeAPIClientTests {
         #expect(emptyToken.value(forHTTPHeaderField: "Authorization") == nil)
     }
 
+    @Test func makeRequestUsesProvidedAcceptHeader() throws {
+        let sse = try NativeAPIClient.makeRequest(
+            baseURL: base, token: nil, path: "v1/loops/events", query: [], accept: "text/event-stream")
+        #expect(sse.value(forHTTPHeaderField: "Accept") == "text/event-stream")
+    }
+
     @Test func makeRequestEncodesQueryItems() throws {
         let req = try NativeAPIClient.makeRequest(
             baseURL: base, token: nil, path: "v1/conversations",
