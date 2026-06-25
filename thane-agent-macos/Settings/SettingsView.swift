@@ -36,11 +36,28 @@ struct ServerSettingsView: View {
 
     private var config: ServerConfig? { configs.first(where: \.isDefault) }
 
+    /// Warns when the entered URL would be blocked by App Transport Security:
+    /// plaintext http:// to a non-local host. Remote servers must use https://.
+    private var insecureRemoteWarning: String? {
+        guard let host = ServerConfig.insecurePlaintextHost(in: serverURL) else { return nil }
+        return "macOS blocks plaintext HTTP to remote hosts (App Transport Security). Use https:// to reach \(host)."
+    }
+
     var body: some View {
         Form {
             Section("Connection") {
-                TextField("Base URL", text: $serverURL, prompt: Text("http://pocket.local"))
+                TextField("Base URL", text: $serverURL, prompt: Text("https://pocket.hollowoak.net"))
                     .textFieldStyle(.roundedBorder)
+
+                if let warning = insecureRemoteWarning {
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        Text(warning)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
 
                 HStack {
                     Group {
@@ -70,6 +87,11 @@ struct ServerSettingsView: View {
                     Spacer()
 
                     if appState.isConnected {
+                        Button("Save & Reconnect") {
+                            saveConfig()
+                            connectToServer()
+                        }
+                        .disabled(serverURL.isEmpty || token.isEmpty)
                         Button("Disconnect") { appState.disconnect() }
                     } else {
                         Button("Connect") {
@@ -105,12 +127,13 @@ struct ServerSettingsView: View {
     }
 
     private func saveConfig() {
+        let trimmedURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let cfg: ServerConfig
         if let existing = config {
-            existing.urlString = serverURL
+            existing.urlString = trimmedURL
             cfg = existing
         } else {
-            cfg = ServerConfig(name: "Default", urlString: serverURL)
+            cfg = ServerConfig(name: "Default", urlString: trimmedURL)
             modelContext.insert(cfg)
         }
         if !token.isEmpty {

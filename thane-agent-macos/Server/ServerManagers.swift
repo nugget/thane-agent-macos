@@ -161,7 +161,7 @@ final class LogsManager {
     func refresh(_ client: NativeAPIClient?) async {
         guard let client else { return }
         isLoading = true
-        var query = [URLQueryItem(name: "limit", value: "200")]
+        var query = [URLQueryItem(name: "limit", value: "100")]
         if let level = level.apiValue {
             query.append(URLQueryItem(name: "level", value: level))
         }
