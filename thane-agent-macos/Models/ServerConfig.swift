@@ -32,4 +32,19 @@ final class ServerConfig {
     /// URL used for the platform WebSocket and native REST API.
     /// Uses the base URL as-is — port routing is handled by the reverse proxy.
     var apiURL: URL? { url }
+
+    /// The host of `urlString` when it would be blocked by App Transport
+    /// Security — plaintext http:// to a non-local host — otherwise nil. Remote
+    /// servers must use https://; localhost, loopback, and *.local are exempt.
+    /// Pure helper; the Settings UI turns the host into a user-facing warning.
+    nonisolated static func insecurePlaintextHost(in urlString: String) -> String? {
+        guard let url = URL(string: urlString.trimmingCharacters(in: .whitespaces)),
+              url.scheme?.lowercased() == "http" else { return nil }
+        let host = (url.host ?? "").lowercased()
+        guard !host.isEmpty else { return nil }
+        if host == "localhost" || host == "127.0.0.1" || host == "::1" || host.hasSuffix(".local") {
+            return nil
+        }
+        return host
+    }
 }

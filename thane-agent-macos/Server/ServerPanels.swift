@@ -80,18 +80,29 @@ struct SessionsPanel: View {
         ScrollView {
             VStack(spacing: 16) {
                 HStack(spacing: 20) {
-                    StatCard(label: "Input", value: ServerFormat.compact(stats.totalInputTokens), icon: "arrow.down.circle")
-                    StatCard(label: "Output", value: ServerFormat.compact(stats.totalOutputTokens), icon: "arrow.up.circle")
-                    StatCard(label: "Requests", value: "\(stats.totalRequests)", icon: "number")
+                    StatCard(label: "Messages", value: ServerFormat.compact(stats.messageCount), icon: "tray.full")
+                    StatCard(label: "Requests", value: ServerFormat.compact(stats.totalRequests), icon: "number")
+                    StatCard(label: "Est. cost", value: ServerFormat.usd(stats.estimatedCostUSD), icon: "dollarsign.circle")
                 }
                 HStack(spacing: 20) {
-                    StatCard(label: "Est. cost", value: ServerFormat.usd(stats.estimatedCostUSD), icon: "dollarsign.circle")
+                    StatCard(label: "Input", value: ServerFormat.compact(stats.totalInputTokens), icon: "arrow.down.circle")
+                    StatCard(label: "Output", value: ServerFormat.compact(stats.totalOutputTokens), icon: "arrow.up.circle")
                     StatCard(label: "Cache hit", value: ServerFormat.percent(stats.cacheHitRate), icon: "bolt.horizontal")
-                    StatCard(
-                        label: "Context",
-                        value: ServerFormat.percent(Double(stats.contextTokens) / Double(max(stats.contextWindow, 1))),
-                        icon: "gauge.with.dots.needle.67percent")
                 }
+
+                // Context-window utilization, with the raw token counts (the
+                // percentage alone reads as "empty" on a fresh, low-token session).
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Label("Context window", systemImage: "gauge.with.dots.needle.67percent")
+                        Spacer()
+                        Text("\(ServerFormat.compact(stats.contextTokens)) / \(ServerFormat.compact(stats.contextWindow))")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
+                    ProgressView(value: Double(stats.contextTokens), total: Double(max(stats.contextWindow, 1)))
+                }
+                .padding(.horizontal, 4)
 
                 if let balance = stats.reportedBalanceUSD {
                     HStack {
