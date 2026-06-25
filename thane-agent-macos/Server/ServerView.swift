@@ -18,8 +18,8 @@ struct ServerView: View {
             } else {
                 NavigationSplitView {
                     List(selection: $section) {
-                        ForEach(ServerSection.allCases) { section in
-                            Label(section.title, systemImage: section.icon).tag(section)
+                        ForEach(ServerSection.allCases) { item in
+                            Label(item.title, systemImage: item.icon).tag(item)
                         }
                     }
                     .navigationSplitViewColumnWidth(min: 170, ideal: 190)

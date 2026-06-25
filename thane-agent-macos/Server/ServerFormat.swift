@@ -54,10 +54,12 @@ nonisolated enum ServerFormat {
     }
 
     /// Parses an RFC3339/ISO8601 timestamp, with or without fractional seconds.
+    /// One formatter instance, reusing it for the fallback parse.
     static func parseISO(_ iso: String) -> Date? {
-        let withFraction = ISO8601DateFormatter()
-        withFraction.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        if let date = withFraction.date(from: iso) { return date }
-        return ISO8601DateFormatter().date(from: iso)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: iso) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: iso)
     }
 }
