@@ -96,11 +96,15 @@ struct SessionsPanel: View {
                     HStack {
                         Label("Context window", systemImage: "gauge.with.dots.needle.67percent")
                         Spacer()
-                        Text("\(ServerFormat.compact(stats.contextTokens)) / \(ServerFormat.compact(stats.contextWindow))")
+                        Text("\(ServerFormat.compact(stats.contextTokens)) / \(stats.contextWindow > 0 ? ServerFormat.compact(stats.contextWindow) : "—")")
                             .monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
-                    ProgressView(value: Double(stats.contextTokens), total: Double(max(stats.contextWindow, 1)))
+                    if stats.contextWindow > 0 {
+                        ProgressView(
+                            value: Double(min(max(stats.contextTokens, 0), stats.contextWindow)),
+                            total: Double(stats.contextWindow))
+                    }
                 }
                 .padding(.horizontal, 4)
 

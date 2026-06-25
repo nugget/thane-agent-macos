@@ -127,12 +127,13 @@ struct ServerSettingsView: View {
     }
 
     private func saveConfig() {
+        let trimmedURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let cfg: ServerConfig
         if let existing = config {
-            existing.urlString = serverURL
+            existing.urlString = trimmedURL
             cfg = existing
         } else {
-            cfg = ServerConfig(name: "Default", urlString: serverURL)
+            cfg = ServerConfig(name: "Default", urlString: trimmedURL)
             modelContext.insert(cfg)
         }
         if !token.isEmpty {

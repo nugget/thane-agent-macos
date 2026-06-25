@@ -11,10 +11,15 @@ struct ServerConfigTests {
         // https:// → fine.
         #expect(ServerConfig.insecurePlaintextHost(in: "https://pocket.hollowoak.net") == nil)
 
-        // localhost / loopback / *.local are ATS-exempt.
+        // localhost / loopback (v4 + bracketed v6) / *.local are ATS-exempt.
         #expect(ServerConfig.insecurePlaintextHost(in: "http://localhost:8080") == nil)
         #expect(ServerConfig.insecurePlaintextHost(in: "http://127.0.0.1:8080") == nil)
+        #expect(ServerConfig.insecurePlaintextHost(in: "http://[::1]:8080") == nil)
         #expect(ServerConfig.insecurePlaintextHost(in: "http://mac.local") == nil)
+
+        // Surrounding whitespace/newlines are trimmed before parsing.
+        #expect(ServerConfig.insecurePlaintextHost(in: "  http://pocket.hollowoak.net  ") == "pocket.hollowoak.net")
+        #expect(ServerConfig.insecurePlaintextHost(in: "https://pocket.hollowoak.net\n") == nil)
 
         // Empty / unparseable → nil.
         #expect(ServerConfig.insecurePlaintextHost(in: "") == nil)
