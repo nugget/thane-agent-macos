@@ -26,6 +26,12 @@ struct MenuBarView: View {
                 }
             }
 
+            if appState.activeServer != nil {
+                Button("Server Status") {
+                    openWindow(id: "server")
+                }
+            }
+
             if appState.binaryManager.state != .notConfigured {
                 Button("Process Health") {
                     openWindow(id: "process-health")
