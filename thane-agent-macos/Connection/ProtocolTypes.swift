@@ -160,10 +160,6 @@ struct PlatformResponse: Codable {
 
 // MARK: - Heartbeat
 
-struct PingMessage: Codable {
-    let type: String // "ping"
-}
-
 struct PongMessage: Codable {
     let type: String // "pong"
 }

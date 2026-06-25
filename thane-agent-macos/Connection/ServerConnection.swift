@@ -289,18 +289,6 @@ final class ServerConnection {
 
     // MARK: - Response Correlation
 
-    private func waitForResponse(id: Int64, timeout: TimeInterval) async throws -> WSMessage {
-        try await withCheckedThrowingContinuation { continuation in
-            pendingResponses[id] = continuation
-
-            Task {
-                try await Task.sleep(for: .seconds(timeout))
-                let cont = pendingResponses.removeValue(forKey: id)
-                cont?.resume(throwing: ConnectionError.timeout)
-            }
-        }
-    }
-
     private func deliverResponse(id: Int64, message: WSMessage) {
         let continuation = pendingResponses.removeValue(forKey: id)
         continuation?.resume(returning: message)
@@ -318,9 +306,6 @@ final class ServerConnection {
 
     private var reconnectAttempt = 0
     private var savedURL: URL?
-    private var savedToken: String?
-    private var savedClientID: String?
-    private var savedClientName: String?
 
     private func scheduleReconnect(token: String, clientID: String, clientName: String) {
         reconnectAttempt += 1
@@ -346,12 +331,11 @@ final class ServerConnection {
         }
     }
 
-    /// Call connect() to also persist the URL for reconnection.
+    /// Connect, optionally retaining the URL so a dropped connection auto-reconnects.
+    /// When `persist` is false no URL is kept — this connection won't reconnect, and
+    /// any previously retained URL is cleared.
     func connect(url: URL, token: String, clientID: String, clientName: String, persist: Bool) {
-        savedURL = url
-        savedToken = token
-        savedClientID = clientID
-        savedClientName = clientName
+        savedURL = persist ? url : nil
         connect(url: url, token: token, clientID: clientID, clientName: clientName)
     }
 
@@ -373,7 +357,6 @@ enum ConnectionError: LocalizedError {
     case decodingFailed
     case unexpectedMessage(String)
     case authFailed(String)
-    case timeout
 
     var errorDescription: String? {
         switch self {
@@ -382,7 +365,6 @@ enum ConnectionError: LocalizedError {
         case .decodingFailed: "Failed to decode message"
         case .unexpectedMessage(let msg): "Unexpected message: \(msg)"
         case .authFailed(let msg): "Authentication failed: \(msg)"
-        case .timeout: "Request timed out"
         }
     }
 }
