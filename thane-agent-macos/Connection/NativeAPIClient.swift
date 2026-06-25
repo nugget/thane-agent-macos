@@ -95,3 +95,67 @@ nonisolated enum NativeAPIError: LocalizedError {
         }
     }
 }
+
+// MARK: - Server-Sent Events
+
+extension NativeAPIClient {
+    /// Opens a Server-Sent Events stream at `path` (e.g. "v1/loops/events") and
+    /// yields each event's `data:` payload decoded as `T`. Mirrors
+    /// `OllamaClient.chat`: one producer task, cancelled on termination.
+    ///
+    /// `bufferingPolicy` defaults to `.unbounded` (lossless). Pass
+    /// `.bufferingNewest(1)` for a wake-signal consumer that only needs the most
+    /// recent event while it catches up.
+    func stream<T: Decodable & Sendable>(
+        _ path: String,
+        as type: T.Type = T.self,
+        bufferingPolicy: AsyncThrowingStream<T, Error>.Continuation.BufferingPolicy = .unbounded
+    ) -> AsyncThrowingStream<T, Error> {
+        AsyncThrowingStream(bufferingPolicy: bufferingPolicy) { continuation in
+            let producer = Task {
+                do {
+                    let request = try Self.makeRequest(baseURL: baseURL, token: token, path: path, query: [])
+                    let (bytes, response) = try await URLSession.shared.bytes(for: request)
+                    guard let http = response as? HTTPURLResponse else {
+                        throw NativeAPIError.invalidResponse
+                    }
+                    guard (200...299).contains(http.statusCode) else {
+                        throw NativeAPIError.httpStatus(http.statusCode)
+                    }
+                    var dataLines: [String] = []
+                    for try await line in bytes.lines {
+                        if line.isEmpty {
+                            // A blank line terminates the current event.
+                            if let payload = Self.joinSSEData(dataLines),
+                               let data = payload.data(using: .utf8) {
+                                continuation.yield(try JSONDecoder().decode(T.self, from: data))
+                            }
+                            dataLines.removeAll(keepingCapacity: true)
+                        } else if let value = Self.sseDataValue(line) {
+                            dataLines.append(value)
+                        }
+                        // event: / id: / retry: / comment (":") lines are ignored.
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { @Sendable _ in producer.cancel() }
+        }
+    }
+
+    /// The value of an SSE `data:` line (prefix and one optional leading space
+    /// stripped), or nil for non-data lines. Pure; unit-tested.
+    static func sseDataValue(_ line: String) -> String? {
+        guard line.hasPrefix("data:") else { return nil }
+        let value = line.dropFirst("data:".count)
+        return value.hasPrefix(" ") ? String(value.dropFirst()) : String(value)
+    }
+
+    /// Joins one event's accumulated `data:` values with newlines (SSE allows
+    /// multi-line data); nil when there were none. Pure; unit-tested.
+    static func joinSSEData(_ lines: [String]) -> String? {
+        lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+}

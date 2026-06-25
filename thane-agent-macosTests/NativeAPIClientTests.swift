@@ -64,4 +64,16 @@ struct NativeAPIClientTests {
             return
         }
     }
+
+    @Test func sseDataValueStripsPrefixAndOptionalSpace() {
+        #expect(NativeAPIClient.sseDataValue(#"data: {"x":1}"#) == #"{"x":1}"#)
+        #expect(NativeAPIClient.sseDataValue(#"data:{"x":1}"#) == #"{"x":1}"#)
+        #expect(NativeAPIClient.sseDataValue("event: loop") == nil)
+        #expect(NativeAPIClient.sseDataValue(": keep-alive comment") == nil)
+    }
+
+    @Test func joinSSEDataJoinsMultiLineElseNil() {
+        #expect(NativeAPIClient.joinSSEData([]) == nil)
+        #expect(NativeAPIClient.joinSSEData(["a", "b"]) == "a\nb")
+    }
 }

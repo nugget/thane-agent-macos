@@ -134,6 +134,15 @@ struct NativeAPITypesTests {
         #expect(entry.subsystem == "scheduler")
     }
 
+    @Test func decodesLoopEvent() throws {
+        let event = try Self.decode(LoopEvent.self, """
+        { "kind": "loop_iteration_complete", "ts": "2026-06-24T14:31:11Z",
+          "data": { "loop_id": "019e7469", "input_tokens": 9123 } }
+        """)
+        #expect(event.kind == "loop_iteration_complete")
+        #expect(event.ts == "2026-06-24T14:31:11Z")
+    }
+
     @Test func malformedJSONThrows() {
         #expect(throws: (any Error).self) {
             try Self.decode(SystemStatus.self, "{ not json")

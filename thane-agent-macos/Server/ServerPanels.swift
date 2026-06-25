@@ -249,3 +249,68 @@ struct SchedulesPanel: View {
         .onDisappear { manager.stop() }
     }
 }
+
+// MARK: - Logs
+
+struct LogsPanel: View {
+    @Environment(AppState.self) private var appState
+
+    var body: some View {
+        @Bindable var manager = appState.logsManager
+        ServerPanelContainer(
+            title: "Logs",
+            isLoading: manager.isLoading && !manager.loaded,
+            error: manager.loaded ? nil : manager.lastError,
+            isEmpty: manager.loaded && manager.entries.isEmpty,
+            emptyLabel: "No Log Entries",
+            emptyIcon: "doc.text.magnifyingglass",
+            retry: { await manager.refresh(appState.nativeClient) }
+        ) {
+            List(manager.entries) { entry in
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(entry.level)
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(levelColor(entry.level))
+                            .frame(width: 46, alignment: .leading)
+                        Text(entry.msg).font(.callout).lineLimit(2)
+                    }
+                    HStack(spacing: 8) {
+                        Text(ServerFormat.relative(entry.ts))
+                        if let subsystem = entry.subsystem { Text(subsystem) }
+                        if let loop = entry.loopName { Text(loop) }
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 1)
+            }
+        }
+        .task { if !manager.loaded { await manager.refresh(appState.nativeClient) } }
+        .onChange(of: manager.level) {
+            Task { await manager.refresh(appState.nativeClient) }
+        }
+        .toolbar {
+            Picker("Level", selection: $manager.level) {
+                ForEach(LogLevelFilter.allCases) { level in
+                    Text(level.title).tag(level)
+                }
+            }
+            .pickerStyle(.menu)
+            Button {
+                Task { await manager.refresh(appState.nativeClient) }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+        }
+    }
+
+    private func levelColor(_ level: String) -> Color {
+        switch level.uppercased() {
+        case "ERROR": .red
+        case "WARN": .orange
+        case "DEBUG", "TRACE": .secondary
+        default: .primary
+        }
+    }
+}

@@ -38,12 +38,13 @@ struct ServerView: View {
         case .loops: LoopsPanel()
         case .conversations: ConversationsPanel()
         case .schedules: SchedulesPanel()
+        case .logs: LogsPanel()
         }
     }
 }
 
 enum ServerSection: String, CaseIterable, Identifiable {
-    case system, sessions, loops, conversations, schedules
+    case system, sessions, loops, conversations, schedules, logs
 
     var id: String { rawValue }
 
@@ -54,6 +55,7 @@ enum ServerSection: String, CaseIterable, Identifiable {
         case .loops: "Loops"
         case .conversations: "Conversations"
         case .schedules: "Schedules"
+        case .logs: "Logs"
         }
     }
 
@@ -64,6 +66,7 @@ enum ServerSection: String, CaseIterable, Identifiable {
         case .loops: "arrow.triangle.2.circlepath"
         case .conversations: "bubble.left.and.bubble.right"
         case .schedules: "calendar.badge.clock"
+        case .logs: "doc.text.magnifyingglass"
         }
     }
 }
