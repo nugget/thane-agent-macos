@@ -26,6 +26,12 @@ struct NativeAPIClientTests {
         #expect(emptyToken.value(forHTTPHeaderField: "Authorization") == nil)
     }
 
+    @Test func makeRequestUsesProvidedAcceptHeader() throws {
+        let sse = try NativeAPIClient.makeRequest(
+            baseURL: base, token: nil, path: "v1/loops/events", query: [], accept: "text/event-stream")
+        #expect(sse.value(forHTTPHeaderField: "Accept") == "text/event-stream")
+    }
+
     @Test func makeRequestEncodesQueryItems() throws {
         let req = try NativeAPIClient.makeRequest(
             baseURL: base, token: nil, path: "v1/conversations",
@@ -63,5 +69,17 @@ struct NativeAPIClientTests {
             Issue.record("expected .httpStatus(500), got \(empty)")
             return
         }
+    }
+
+    @Test func sseDataValueStripsPrefixAndOptionalSpace() {
+        #expect(NativeAPIClient.sseDataValue(#"data: {"x":1}"#) == #"{"x":1}"#)
+        #expect(NativeAPIClient.sseDataValue(#"data:{"x":1}"#) == #"{"x":1}"#)
+        #expect(NativeAPIClient.sseDataValue("event: loop") == nil)
+        #expect(NativeAPIClient.sseDataValue(": keep-alive comment") == nil)
+    }
+
+    @Test func joinSSEDataJoinsMultiLineElseNil() {
+        #expect(NativeAPIClient.joinSSEData([]) == nil)
+        #expect(NativeAPIClient.joinSSEData(["a", "b"]) == "a\nb")
     }
 }

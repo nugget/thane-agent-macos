@@ -133,6 +133,15 @@ nonisolated struct LoopStatus: Decodable, Sendable, Identifiable {
     }
 }
 
+/// A single loop lifecycle event from the `/v1/loops/events` SSE stream. We use
+/// it only as a "something changed" wake signal, so the kind-specific `data` is
+/// kept dynamic.
+nonisolated struct LoopEvent: Decodable, Sendable {
+    let kind: String
+    let ts: String
+    let data: AnyCodable?
+}
+
 // MARK: - Conversations
 
 nonisolated struct ChannelBinding: Decodable, Sendable {

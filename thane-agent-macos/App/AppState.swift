@@ -32,6 +32,7 @@ final class AppState {
     let loopsManager = LoopsManager()
     let conversationsManager = ConversationsManager()
     let schedulesManager = SchedulesManager()
+    let logsManager = LogsManager()
 
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "app")
     private(set) var calendarAuthorization: EventKitAuthorizationState = .notDetermined
