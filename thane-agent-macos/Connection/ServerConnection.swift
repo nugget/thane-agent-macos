@@ -6,6 +6,38 @@ private struct ReceivedMessage {
     let rawData: Data
 }
 
+/// Realtime WebSocket endpoint contract (see thane-ai-agent#1081).
+///
+/// `nonisolated` so its static members are reachable from any executor under
+/// the app's `default-isolation=MainActor` default — the URL builder and the
+/// constants are used from the connection's setup path and from the test
+/// target, neither of which should hop to the main actor.
+nonisolated enum WSEndpoint {
+    /// Canonical realtime path. Unifies the pre-reshape companion/platform
+    /// endpoints; we connect here and negotiate the envelope via `protocol`.
+    static let realtimePath = "v1/realtime/ws"
+
+    /// The request-envelope protocol this client speaks. The app handles only
+    /// `platform_request`, so we always send "platform"; on the realtime path
+    /// the server would otherwise default to the companion envelope.
+    static let platformProtocol = "platform"
+
+    /// Appends the realtime path and upgrades the scheme for the WebSocket
+    /// upgrade. Using wss:// (instead of https://) forces an HTTP/1.1 upgrade
+    /// (RFC 6455) rather than HTTP/2 extended CONNECT (RFC 8441), which is
+    /// required for compatibility with Traefik and most reverse proxies.
+    static func realtimeURL(base: URL) -> URL {
+        let rawURL = base.appendingPathComponent(realtimePath)
+        var components = URLComponents(url: rawURL, resolvingAgainstBaseURL: false) ?? URLComponents()
+        switch components.scheme {
+        case "https": components.scheme = "wss"
+        case "http":  components.scheme = "ws"
+        default: break
+        }
+        return components.url ?? rawURL
+    }
+}
+
 /// Manages the WebSocket connection to a thane-ai-agent server.
 /// Handles auth handshake, capability registration, message routing,
 /// and reconnection with exponential backoff.
@@ -69,34 +101,7 @@ final class ServerConnection {
         }
     }
 
-    /// Send a chat request and return streamed tokens via the callback.
-    /// The final ChatStreamData with kind "done" contains the complete response.
-    func sendChatRequest(
-        conversationID: String,
-        message: String,
-        stream: Bool = true,
-        onStream: @escaping (ChatStreamData) -> Void
-    ) async throws {
-        let id = nextMessageID()
-        let request = ChatRequest(
-            id: id,
-            type: "chat_request",
-            conversationID: conversationID,
-            message: message,
-            stream: stream
-        )
-        streamHandlers[id] = onStream
-        do {
-            try await sendJSON(request)
-        } catch {
-            streamHandlers.removeValue(forKey: id)
-            throw error
-        }
-    }
-
     // MARK: - Private
-
-    private var streamHandlers: [Int64: (ChatStreamData) -> Void] = [:]
 
     private func nextMessageID() -> Int64 {
         let id = nextID
@@ -107,17 +112,7 @@ final class ServerConnection {
     private func performConnect(url: URL, token: String, clientID: String, clientName: String) {
         cleanupTransport(closeCode: .goingAway)
 
-        // Build the WebSocket URL. Using wss:// (instead of https://) forces HTTP/1.1
-        // upgrade (RFC 6455) rather than HTTP/2 extended CONNECT (RFC 8441), which is
-        // required for compatibility with Traefik and most reverse proxies.
-        let rawURL = url.appendingPathComponent("v1/platform/ws")
-        var components = URLComponents(url: rawURL, resolvingAgainstBaseURL: false) ?? URLComponents()
-        switch components.scheme {
-        case "https": components.scheme = "wss"
-        case "http":  components.scheme = "ws"
-        default: break
-        }
-        let wsURL = components.url ?? rawURL
+        let wsURL = WSEndpoint.realtimeURL(base: url)
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
         session = URLSession(configuration: config)
@@ -150,7 +145,8 @@ final class ServerConnection {
                 type: "auth",
                 token: token,
                 clientName: clientName,
-                clientID: clientID
+                clientID: clientID,
+                connectionProtocol: WSEndpoint.platformProtocol
             )
             try await sendJSON(authMsg)
 
@@ -238,16 +234,22 @@ final class ServerConnection {
                     try? await self.sendJSON(response)
                 }
 
-            case "chat_stream":
-                let stream = try JSONDecoder().decode(ChatStreamMessage.self, from: received.rawData)
-                let handler = streamHandlers[stream.id]
-                if stream.data.kind == "done" {
-                    streamHandlers.removeValue(forKey: stream.id)
-                }
-                handler?(stream.data)
+            case "companion_request":
+                // The server selects the request envelope from the auth
+                // `protocol` field; we always send "platform". A
+                // companion_request here means the envelope was mis-negotiated
+                // (and this client does not decode it). Fail loudly rather than
+                // silently dropping server→client dispatch.
+                let detail = "Server sent companion_request — envelope mis-negotiated; "
+                    + "expected platform_request. Check the auth protocol field."
+                logger.error("\(detail)")
+                Task { @MainActor in self.lastError = detail }
 
             default:
-                logger.debug("Unhandled message type: \(message.type)")
+                logger.error("Unhandled message type: \(message.type)")
+                Task { @MainActor in
+                    self.lastError = "Unhandled server message type: \(message.type)"
+                }
             }
         }
     }
@@ -307,7 +309,6 @@ final class ServerConnection {
     private func cancelAllPending(error: Error) {
         let pending = pendingResponses
         pendingResponses.removeAll()
-        streamHandlers.removeAll()
         for (_, continuation) in pending {
             continuation.resume(throwing: error)
         }

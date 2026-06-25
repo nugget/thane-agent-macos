@@ -24,16 +24,26 @@ struct AuthRequiredMessage: Codable {
     let version: String
 }
 
-struct AuthMessage: Codable {
+/// `nonisolated` so its Codable conformance carries no actor isolation under
+/// the app's `default-isolation=MainActor` default — it is encoded both from
+/// the main-actor connection path and from the nonisolated test target.
+nonisolated struct AuthMessage: Codable {
     let type: String // "auth"
     let token: String
     let clientName: String
     let clientID: String
+    /// Selects the server's request envelope for this connection. The app
+    /// handles only the platform envelope (`platform_request`), so this is
+    /// always "platform". On the canonical `/v1/realtime/ws` endpoint the
+    /// server picks the envelope from this field; omitting it would default to
+    /// the companion envelope, which this client does not decode.
+    let connectionProtocol: String
 
     enum CodingKeys: String, CodingKey {
         case type, token
         case clientName = "client_name"
         case clientID = "client_id"
+        case connectionProtocol = "protocol"
     }
 }
 
@@ -146,42 +156,6 @@ struct PlatformResponse: Codable {
     let success: Bool
     let result: AnyCodable?
     let error: WSError?
-}
-
-// MARK: - Chat Messages (Client → Server)
-
-struct ChatRequest: Codable {
-    let id: Int64
-    let type: String // "chat_request"
-    let conversationID: String
-    let message: String
-    let stream: Bool
-
-    enum CodingKeys: String, CodingKey {
-        case id, type, message, stream
-        case conversationID = "conversation_id"
-    }
-}
-
-struct ChatStreamData: Codable {
-    let kind: String // "token", "tool_call_start", "tool_call_done", "done"
-    let content: String?
-    let tool: String?
-    let model: String?
-    let inputTokens: Int?
-    let outputTokens: Int?
-
-    enum CodingKeys: String, CodingKey {
-        case kind, content, tool, model
-        case inputTokens = "input_tokens"
-        case outputTokens = "output_tokens"
-    }
-}
-
-struct ChatStreamMessage: Codable {
-    let id: Int64
-    let type: String // "chat_stream"
-    let data: ChatStreamData
 }
 
 // MARK: - Heartbeat

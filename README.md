@@ -114,7 +114,7 @@ Release notes and artifacts live at [Releases](https://github.com/nugget/thane-a
 
 - **[nugget/thane-ai-agent](https://github.com/nugget/thane-ai-agent)** — The Go agent this app connects to. Start there if you don't have a Thane running yet.
 - **[Thane docs](https://github.com/nugget/thane-ai-agent/tree/main/docs)** — Philosophy, architecture, configuration, deployment
-- **[WebSocket protocol design](https://github.com/nugget/thane-ai-agent/issues/627)** — The platform service contract this app implements
+- **[Realtime WebSocket contract](https://github.com/nugget/thane-ai-agent/issues/1081)** — The platform service contract this app implements (`/v1/realtime/ws`), superseding the original [#627](https://github.com/nugget/thane-ai-agent/issues/627) design
 
 ## License
 

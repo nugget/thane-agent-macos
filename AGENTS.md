@@ -96,8 +96,10 @@ Silicon.
 - **App entry / windows** — `ThaneApp.swift` (scene declarations,
   ModelContainer), `AppState.swift` (central `@Observable` coordinator)
 - **Connection** — `ServerConnection.swift` (WebSocket client with auth
-  handshake; uses `wss://` scheme to force HTTP/1.1 upgrade for Traefik
-  compatibility)
+  handshake; connects to `/v1/realtime/ws` and sends `protocol:"platform"`
+  so the server selects the platform-request envelope — the path alone
+  would select the companion envelope. Uses `wss://` scheme to force
+  HTTP/1.1 upgrade for Traefik compatibility)
 - **Platform services** — `PlatformServiceRouter.swift` dispatches
   requests to registered providers; `CalendarService` and
   `ContactsService` ship today
