@@ -331,9 +331,11 @@ final class ServerConnection {
         }
     }
 
-    /// Call connect() to also persist the URL for reconnection.
+    /// Connect, optionally retaining the URL so a dropped connection auto-reconnects.
+    /// When `persist` is false no URL is kept — this connection won't reconnect, and
+    /// any previously retained URL is cleared.
     func connect(url: URL, token: String, clientID: String, clientName: String, persist: Bool) {
-        savedURL = url
+        savedURL = persist ? url : nil
         connect(url: url, token: token, clientID: clientID, clientName: clientName)
     }
 
