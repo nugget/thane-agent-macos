@@ -285,13 +285,19 @@ prepare-release version:
         exit 1
     fi
 
-    # Tag locally (not pushed). Re-preparing the same commit is allowed.
-    if git rev-parse "$tag" >/dev/null 2>&1; then
-        if [ "$(git rev-parse "$tag")" != "$(git rev-parse HEAD)" ]; then
-            echo "Tag $tag already exists at a different commit." >&2
+    # Tag locally (not pushed). Re-preparing the exact same commit is allowed —
+    # but only when the existing tag is the annotated/signed tag we create, never
+    # a stray lightweight tag (which would publish unsigned, defeating 'git tag -s').
+    if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+        if [ "$(git cat-file -t "$tag")" != "tag" ]; then
+            echo "Tag $tag exists but is not an annotated tag — delete it and re-run (releases use 'git tag -s')." >&2
             exit 1
         fi
-        echo "==> Tag $tag already exists at HEAD — re-preparing."
+        if [ "$(git rev-parse "${tag}^{commit}")" != "$(git rev-parse HEAD)" ]; then
+            echo "Tag $tag already exists at a different commit — delete it or pick a new version." >&2
+            exit 1
+        fi
+        echo "==> Tag $tag already exists at HEAD (annotated) — re-preparing."
     fi
 
     # Gate: full CI must pass.
@@ -299,7 +305,7 @@ prepare-release version:
     just ci
 
     # Tag before building so git describe bakes the tag into the artifact.
-    if ! git rev-parse "$tag" >/dev/null 2>&1; then
+    if ! git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
         echo "==> Tagging $tag..."
         git tag -s "$tag" -m "Release $tag"
     fi
@@ -355,8 +361,16 @@ publish-release version release_kind="auto":
         echo "Prepared from ${PREPARED_COMMIT:-?}, but HEAD is $head_commit — re-run prepare-release." >&2
         exit 1
     fi
-    if ! git rev-parse "$tag" >/dev/null 2>&1; then
+    if ! git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
         echo "Tag $tag is missing — run 'just prepare-release $version'." >&2
+        exit 1
+    fi
+    if [ "$(git cat-file -t "$tag")" != "tag" ]; then
+        echo "Tag $tag is not an annotated tag — re-run 'just prepare-release $version'." >&2
+        exit 1
+    fi
+    if [ "$(git rev-parse "${tag}^{commit}")" != "$head_commit" ]; then
+        echo "Tag $tag points at a different commit than HEAD ($head_commit) — re-run 'just prepare-release $version'." >&2
         exit 1
     fi
     if ! git diff --quiet HEAD -- || ! git diff --cached --quiet -- ; then
