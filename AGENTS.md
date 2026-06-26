@@ -115,9 +115,10 @@ Silicon.
 
 ## Releases
 
-- Tag → DMG via `just release VERSION`. Driven locally on the release
-  workstation — signing identity and notary profile live in the
-  operator's keychain.
+- Tag → DMG via `just release-github VERSION` (or the two-step
+  `just prepare-release VERSION` → `just publish-release VERSION` for a
+  reviewable breakpoint). Driven locally on the release workstation —
+  signing identity and notary profile live in the operator's keychain.
 - Git tag is the single source of truth for `MARKETING_VERSION` (nearest
   tag) and `CURRENT_PROJECT_VERSION` (commit count). pbxproj values are
   fallbacks used only by bare Xcode IDE opens.
