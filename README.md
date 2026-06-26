@@ -96,8 +96,9 @@ checksums file to GitHub. The release workstation drives the whole pipeline
 locally — signing identity and notary profile stay in the operator's
 keychain.
 
-- `just release 0.1.0` — cut a formal release (tag, DMG, notarize, staple, upload)
-- `just release 0.2.0-rc.1` — auto-detected as a prerelease
+- `just release-github 0.1.0` — cut a formal release (tag, DMG, notarize, staple, upload)
+- `just release-github 0.2.0-rc.1` — auto-detected as a prerelease
+- `just prepare-release 0.1.0` then `just publish-release 0.1.0` — same flow with a reviewable breakpoint between building artifacts and publishing
 
 Release notes and artifacts live at [Releases](https://github.com/nugget/thane-agent-macos/releases).
 

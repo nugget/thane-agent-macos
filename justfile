@@ -1,3 +1,8 @@
+# Don't echo each command line before running it — recipes emit their own
+# status and the underlying tools (xcodebuild, etc.) print their own output, so
+# the default interactive experience stays clean. Use `just --verbose <recipe>`
+# to see the raw commands when debugging.
+set quiet
 set dotenv-load
 
 app               := "thane-agent-macos"
@@ -15,32 +20,35 @@ export DEVELOPER_DIR := env("DEVELOPER_DIR", "/Applications/Xcode.app/Contents/D
 
 # List available recipes
 default:
+    @echo "Common workflows:"
+    @echo "    just ci                                                   # full local gate (build + test) — run before pushing"
+    @echo "    just release-github <version> [auto|prerelease|release]   # cut a release (DMG, notarize, GitHub)"
+    @echo "    just deploy-macos <user@host>                             # build, notarize, and deploy the app to a macOS host"
+    @echo ""
     @just --list
 
-# --- Version helpers ---
+# --- Version ---
 
-# Print the marketing version derived from the nearest git tag.
-# Example: "0.1.0" (or "0.0.0" when no tag exists).
+[doc("Print the marketing version (from the nearest git tag)")]
 [group('version')]
 marketing-version:
     #!/usr/bin/env bash
     tag="$(git describe --tags --abbrev=0 2>/dev/null || echo v0.0.0)"
     printf '%s\n' "${tag#v}"
 
-# Print the build number derived from the git commit count.
+[doc("Print the build number (git commit count)")]
 [group('version')]
 build-number:
-    @git rev-list --count HEAD 2>/dev/null || echo 0
+    git rev-list --count HEAD 2>/dev/null || echo 0
 
-# Print the full version string baked into the app (git describe + dirty flag).
+[doc("Print the full version string baked into the app (git describe + dirty flag)")]
 [group('version')]
 describe:
-    @git describe --tags --always --dirty 2>/dev/null || echo dev
+    git describe --tags --always --dirty 2>/dev/null || echo dev
 
 # --- Build ---
 
-# Build for local development. Honors CODE_SIGNING_ALLOWED=NO for CI/ad-hoc
-# environments without a Developer ID certificate in the keychain.
+[doc("Build the app for local development (honors CODE_SIGNING_ALLOWED=NO for CI)")]
 [group('build')]
 build: stamp
     #!/usr/bin/env bash
@@ -62,23 +70,12 @@ build: stamp
     fi
     xcodebuild "${args[@]}" build
 
-# Archive for distribution. Version comes from the nearest git tag.
+[doc("Remove build artifacts")]
 [group('build')]
-archive: stamp
-    #!/usr/bin/env bash
-    set -euo pipefail
-    marketing="$(just marketing-version)"
-    build_num="$(just build-number)"
-    rm -rf "{{build-dir}}/{{app}}.xcarchive"
-    xcodebuild archive \
-        -scheme {{app}} \
-        -destination 'generic/platform=macOS' \
-        -archivePath "{{build-dir}}/{{app}}.xcarchive" \
-        MARKETING_VERSION="$marketing" \
-        CURRENT_PROJECT_VERSION="$build_num"
+clean:
+    rm -rf "{{build-dir}}"
 
 # Generate BuildInfo.swift with compile-time constants (git describe et al).
-[group('build')]
 [private]
 stamp:
     #!/usr/bin/env bash
@@ -100,10 +97,25 @@ stamp:
     }
     SWIFT
 
-# Export a Developer ID-signed .app from the archive. Generates an
-# ExportOptions plist from THANE_CODESIGN_IDENTITY so the team ID never
-# gets checked into the repo.
-[group('build')]
+# Building block: archive for distribution. Version comes from the nearest git tag.
+[private]
+archive: stamp
+    #!/usr/bin/env bash
+    set -euo pipefail
+    marketing="$(just marketing-version)"
+    build_num="$(just build-number)"
+    rm -rf "{{build-dir}}/{{app}}.xcarchive"
+    xcodebuild archive \
+        -scheme {{app}} \
+        -destination 'generic/platform=macOS' \
+        -archivePath "{{build-dir}}/{{app}}.xcarchive" \
+        MARKETING_VERSION="$marketing" \
+        CURRENT_PROJECT_VERSION="$build_num"
+
+# Building block: export a Developer ID-signed .app from the archive. Generates
+# an ExportOptions plist from THANE_CODESIGN_IDENTITY so the team ID never gets
+# checked into the repo.
+[private]
 export: archive
     #!/usr/bin/env bash
     set -euo pipefail
@@ -140,14 +152,9 @@ export: archive
         -exportOptionsPlist "$export_plist"
     echo "Exported: {{build-dir}}/export/{{app}}.app"
 
-# Clean build artifacts
-[group('build')]
-clean:
-    rm -rf "{{build-dir}}"
-
 # --- Test ---
 
-# Build and run unit tests. Same signing behavior as `just build`.
+[doc("Build and run the unit tests (same signing behavior as `just build`)")]
 [group('test')]
 test:
     #!/usr/bin/env bash
@@ -167,15 +174,15 @@ test:
 
 # --- CI ---
 
-# Full local CI gate — run before every push
+[doc("Full local CI gate (build + test) — run before every push")]
 [group('ci')]
 ci: build test
 
 # --- Release engineering ---
 
-# Notarize and staple the exported .app. Uses a submission zip (Apple's
-# notarytool doesn't accept raw .app bundles).
-[group('release-engineering')]
+# Building block: notarize and staple the exported .app. Uses a submission zip
+# (notarytool doesn't accept raw .app bundles).
+[private]
 notarize-app: export
     #!/usr/bin/env bash
     set -euo pipefail
@@ -192,9 +199,8 @@ notarize-app: export
     xcrun stapler staple "{{build-dir}}/export/{{app}}.app"
     echo "Notarized and stapled: {{build-dir}}/export/{{app}}.app"
 
-# Package the notarized .app into a signed, notarized, stapled DMG.
-[doc("Building block: produce a release-ready DMG from the notarized .app")]
-[group('release-engineering')]
+# Building block: produce a signed, notarized, stapled DMG from the notarized .app.
+[private]
 dmg: notarize-app
     #!/usr/bin/env bash
     set -euo pipefail
@@ -211,9 +217,8 @@ dmg: notarize-app
     xcrun stapler staple "$dmg_path"
     echo "DMG ready: $dmg_path"
 
-# Write a SHA-256 checksums file next to the release artifacts.
-[doc("Building block: write {app}_{version}_checksums.txt alongside release assets")]
-[group('release-engineering')]
+# Building block: write {app}_{version}_checksums.txt alongside release assets.
+[private]
 checksums:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -235,18 +240,23 @@ checksums:
     echo "Wrote $release_dir/$output"
     cat "$output"
 
-# --- Release flow ---
-
-# Full release: verify, build, notarize, DMG, checksums, tag, GitHub release.
-# Release notes are auto-generated from PRs/commits since the last tag.
-[doc("Cut a formal release for VERSION (e.g. 0.1.0). Tags, builds DMG, uploads to GitHub.")]
+# Build + notarize the DMG and checksums locally, without tagging or publishing.
+# Stops at a reviewable breakpoint: inspect build/release/, then `publish-release`.
+# Mirrors thane-ai-agent's prepare-release (names are shared; this DMG/notarize
+# implementation is ours).
+[doc("Prepare a release locally for VERSION: CI, tag, build notarized DMG + checksums (no push)")]
 [group('release-engineering')]
-release version:
+prepare-release version:
     #!/usr/bin/env bash
     set -euo pipefail
     version="{{version}}"
     version="${version#v}"
     tag="v${version}"
+
+    if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+        echo "Version must look like 0.1.0 or 0.1.0-rc.1" >&2
+        exit 1
+    fi
 
     # Preflight: release-engineering env vars present.
     if [ -z "{{signing-identity}}" ]; then
@@ -258,33 +268,36 @@ release version:
         exit 1
     fi
 
-    # Preflight: clean working tree.
-    if ! git diff --quiet HEAD -- || ! git diff --cached --quiet -- ; then
-        echo "Working tree has uncommitted changes — commit or stash before releasing." >&2
-        exit 1
-    fi
-
-    # Preflight: tag doesn't exist yet.
-    if git rev-parse "$tag" >/dev/null 2>&1; then
-        echo "Tag $tag already exists." >&2
-        exit 1
-    fi
-
-    # Preflight: on main.
+    # Preflight: on main, clean tree, HEAD already on origin/main (releases ship
+    # from merged commits, never push code).
     branch="$(git rev-parse --abbrev-ref HEAD)"
     if [ "$branch" != "main" ]; then
         echo "Not on main (current: $branch) — releases ship from main." >&2
         exit 1
     fi
-
-    # Preflight: HEAD is already on origin/main. Releases don't push commits;
-    # everything must be merged via PR first.
+    if ! git diff --quiet HEAD -- || ! git diff --cached --quiet -- ; then
+        echo "Working tree has uncommitted changes — commit or stash before releasing." >&2
+        exit 1
+    fi
     git fetch --quiet origin main
     if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
         echo "HEAD does not match origin/main — merge release commits via PR first." >&2
-        echo "  local  HEAD: $(git rev-parse --short HEAD)" >&2
-        echo "  origin/main: $(git rev-parse --short origin/main)" >&2
         exit 1
+    fi
+
+    # Tag locally (not pushed). Re-preparing the exact same commit is allowed —
+    # but only when the existing tag is the annotated/signed tag we create, never
+    # a stray lightweight tag (which would publish unsigned, defeating 'git tag -s').
+    if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+        if [ "$(git cat-file -t "$tag")" != "tag" ]; then
+            echo "Tag $tag exists but is not an annotated tag — delete it and re-run (releases use 'git tag -s')." >&2
+            exit 1
+        fi
+        if [ "$(git rev-parse "${tag}^{commit}")" != "$(git rev-parse HEAD)" ]; then
+            echo "Tag $tag already exists at a different commit — delete it or pick a new version." >&2
+            exit 1
+        fi
+        echo "==> Tag $tag already exists at HEAD (annotated) — re-preparing."
     fi
 
     # Gate: full CI must pass.
@@ -292,30 +305,103 @@ release version:
     just ci
 
     # Tag before building so git describe bakes the tag into the artifact.
-    echo "==> Tagging $tag..."
-    git tag -s "$tag" -m "Release $tag"
+    if ! git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+        echo "==> Tagging $tag..."
+        git tag -s "$tag" -m "Release $tag"
+    fi
 
-    # Build DMG (archive → export → notarize .app → DMG → sign → notarize → staple).
+    # Build the notarized DMG (archive → export → notarize .app → DMG → notarize → staple).
     echo "==> Building notarized DMG..."
     just dmg
 
-    # Checksums.
     echo "==> Writing checksums..."
     just checksums
 
-    # Push the tag only — commits must already be on origin/main.
-    echo "==> Pushing tag..."
-    git push origin "$tag"
+    # Handoff metadata: publish-release verifies it's publishing exactly what was
+    # prepared from this commit.
+    mkdir -p "{{build-dir}}"
+    meta="{{build-dir}}/.{{app}}_${version}_prepared.env"
+    {
+        printf 'PREPARED_VERSION=%s\n' "$version"
+        printf 'PREPARED_COMMIT=%s\n' "$(git rev-parse HEAD)"
+    } > "$meta"
 
-    # GitHub release — notes auto-generated from merged PRs + commits since
-    # the previous tag.
+    echo ""
+    echo "==> Prepared $tag (local tag, not pushed). Inspect {{build-dir}}/release/, then:"
+    echo "      just publish-release $version"
+    echo "    To abort:  git tag -d $tag"
+
+# Publish an already-prepared release: verify the prepared artifacts match HEAD,
+# push the tag, and create the GitHub release. release_kind: auto (default,
+# prerelease inferred from a pre-release version), prerelease, or release.
+[doc("Publish a prepared release for VERSION: push tag + GitHub release (run prepare-release first)")]
+[group('release-engineering')]
+publish-release version release_kind="auto":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{version}}"
+    version="${version#v}"
+    tag="v${version}"
+    release_kind="{{release_kind}}"
+
+    meta="{{build-dir}}/.{{app}}_${version}_prepared.env"
+    if [ ! -f "$meta" ]; then
+        echo "No prepared release for $version — run 'just prepare-release $version' first." >&2
+        exit 1
+    fi
+    # shellcheck disable=SC1090
+    . "$meta"
+
+    head_commit="$(git rev-parse HEAD)"
+    if [ "${PREPARED_VERSION:-}" != "$version" ]; then
+        echo "Prepared metadata is for '${PREPARED_VERSION:-}', not '$version' — re-run prepare-release." >&2
+        exit 1
+    fi
+    if [ "${PREPARED_COMMIT:-}" != "$head_commit" ]; then
+        echo "Prepared from ${PREPARED_COMMIT:-?}, but HEAD is $head_commit — re-run prepare-release." >&2
+        exit 1
+    fi
+    if ! git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+        echo "Tag $tag is missing — run 'just prepare-release $version'." >&2
+        exit 1
+    fi
+    if [ "$(git cat-file -t "$tag")" != "tag" ]; then
+        echo "Tag $tag is not an annotated tag — re-run 'just prepare-release $version'." >&2
+        exit 1
+    fi
+    if [ "$(git rev-parse "${tag}^{commit}")" != "$head_commit" ]; then
+        echo "Tag $tag points at a different commit than HEAD ($head_commit) — re-run 'just prepare-release $version'." >&2
+        exit 1
+    fi
+    if ! git diff --quiet HEAD -- || ! git diff --cached --quiet -- ; then
+        echo "Working tree has uncommitted changes — commit or stash before publishing." >&2
+        exit 1
+    fi
+
     release_dir="{{build-dir}}/release"
     dmg_path="${release_dir}/{{app}}_${version}.dmg"
     checksum_path="${release_dir}/{{app}}_${version}_checksums.txt"
+    for asset in "$dmg_path" "$checksum_path"; do
+        if [ ! -f "$asset" ]; then
+            echo "Missing prepared asset: $asset — run 'just prepare-release $version'." >&2
+            exit 1
+        fi
+    done
 
+    case "$release_kind" in
+        auto)       prerelease_flag=""; case "$version" in *-*) prerelease_flag="--prerelease" ;; esac ;;
+        prerelease) prerelease_flag="--prerelease" ;;
+        release)    prerelease_flag="" ;;
+        *) echo "release_kind must be auto, prerelease, or release (got '$release_kind')." >&2; exit 1 ;;
+    esac
+
+    # Push the tag only — commits must already be on origin/main.
+    echo "==> Pushing tag $tag..."
+    git push origin "$tag"
+
+    # GitHub release — notes auto-generated from merged PRs + commits since the
+    # previous tag.
     echo "==> Creating GitHub release..."
-    prerelease_flag=""
-    case "$version" in *-*) prerelease_flag="--prerelease" ;; esac
     gh release create "$tag" \
         --title "$tag" \
         --generate-notes \
@@ -325,18 +411,27 @@ release version:
 
     echo "==> Released $tag"
 
+# Cut a full release for VERSION end-to-end: prepare (CI, tag, DMG, checksums)
+# then publish (push tag, GitHub release). Release notes auto-generated from PRs
+# and commits since the last tag. release_kind: auto (default), prerelease, release.
+[doc("Cut a release for VERSION (e.g. 0.1.0): prepare + publish in one step")]
+[group('release-engineering')]
+release-github version release_kind="auto":
+    just prepare-release "{{version}}"
+    just publish-release "{{version}}" "{{release_kind}}"
+
 # --- Deploy ---
 
-# Deploy notarized .app to a remote macOS host via rsync
-[doc("Operator path: build, notarize, and deploy the companion app to a remote host")]
+[doc("Build, notarize, and deploy the app to a remote macOS host (takes user@host); prints the deployed version")]
 [group('deploy')]
-deploy-agent-macos host deploy_path=deploy-path: notarize-app
+deploy-macos host deploy_path=deploy-path: notarize-app
     #!/usr/bin/env bash
     set -euo pipefail
     host="{{host}}"
     app="{{app}}"
     deploy_path="{{deploy_path}}"
     build_dir="{{build-dir}}"
+    version="$(just describe)"
 
     echo "Stopping ${app} on ${host}..."
     ssh "$host" "pkill -x '${app}' 2>/dev/null || true"
@@ -347,8 +442,8 @@ deploy-agent-macos host deploy_path=deploy-path: notarize-app
     rsync -av \
         "${build_dir}/export/${app}.app" \
         "${host}:${deploy_path}/"
-    echo "Deployed."
 
     echo "Starting ${app} on ${host}..."
     ssh "$host" "open '${deploy_path}/${app}.app'"
-    echo "Done."
+
+    echo "Deployed version: ${version} -> ${host}"

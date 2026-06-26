@@ -39,11 +39,17 @@ Releases require `THANE_CODESIGN_IDENTITY` and `THANE_NOTARY_PROFILE`
 in the environment. The user typically sets these in their fish shell,
 so Claude's bash subshells won't inherit them. Two options:
 
-1. Ask the user to run `just release VERSION` from their own shell.
+1. Ask the user to run `just release-github VERSION` from their own shell.
 2. Ask them to drop the vars into `.env` (gitignored) so just's
    `set dotenv-load` can pick them up.
 
-Never push directly to `main` — `just release` gates on `HEAD` matching
+`just release-github VERSION` runs the full path; for a reviewable
+breakpoint it's `just prepare-release VERSION` (CI, tag, notarized DMG +
+checksums, no push) then `just publish-release VERSION` (push tag, GitHub
+release). Recipe names track thane-ai-agent; the DMG/notarize implementation
+is this repo's.
+
+Never push directly to `main` — `prepare-release` gates on `HEAD` matching
 `origin/main`, so release commits must be merged via PR first.
 
 ## GitHub Collaboration
