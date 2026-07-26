@@ -317,13 +317,19 @@ final class BinaryManager {
 
     /// Argument vector for `thane serve` against `workspace`.
     ///
-    /// Thane parses argv by hand and ignores flags it does not recognize when
-    /// a subcommand is already set, so a misspelled flag is dropped silently
-    /// rather than rejected — `--workspace` would leave the binary resolving
-    /// its instance from the working directory instead. Built here so the
-    /// exact spelling is asserted in tests.
+    /// The flag goes *before* the subcommand deliberately. Thane parses argv by
+    /// hand: once a subcommand has been seen, an unrecognized token is
+    /// collected as a subcommand argument, so a misspelled flag after it is
+    /// dropped silently and the binary resolves its instance from the working
+    /// directory instead. Before the subcommand, the same token hits the
+    /// `unknown flag` branch and the process exits non-zero.
+    ///
+    /// That is not hypothetical: it is how `--config` went unnoticed here for
+    /// as long as it did. Ordering the arguments this way turns the next
+    /// spelling mistake into a startup failure rather than a silent
+    /// misconfiguration.
     nonisolated static func serveArguments(workspace: URL) -> [String] {
-        ["serve", "-workspace", workspace.path]
+        ["-workspace", workspace.path, "serve"]
     }
 
     /// The config thane resolves for `workspace`: `<workspace>/core/config.yaml`.

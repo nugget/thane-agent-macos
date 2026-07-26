@@ -16,7 +16,7 @@ struct BinaryInvocationTests {
     @Test
     func serveNamesTheWorkspaceWithASingleDashFlag() {
         let args = BinaryManager.serveArguments(workspace: workspace)
-        #expect(args == ["serve", "-workspace", "/Users/x/Thane"])
+        #expect(args == ["-workspace", "/Users/x/Thane", "serve"])
     }
 
     @Test
@@ -32,11 +32,31 @@ struct BinaryInvocationTests {
     }
 
     @Test
-    func subcommandComesFirstSoFlagsAreNotSwallowed() {
-        // Thane treats the first non-flag token as the subcommand; anything
-        // unrecognized after that becomes a subcommand argument.
+    func flagsPrecedeTheSubcommandSoATypoFailsLoudly() {
+        // Verified against thane's parser directly. Once a subcommand has been
+        // seen, an unrecognized token is collected as a subcommand argument and
+        // the process still exits 0:
+        //
+        //   serve --workspace /path   -> workspace unset, no error
+        //   --workspace /path serve   -> "unknown flag: --workspace"
+        //
+        // Only the second ordering turns a spelling mistake into a startup
+        // failure. The first is how `--config` went unnoticed here.
         let args = BinaryManager.serveArguments(workspace: workspace)
-        #expect(args.first == "serve")
+        #expect(args.first == "-workspace")
+        #expect(args.last == "serve")
+        let flagIndex = args.firstIndex(of: "-workspace")
+        let commandIndex = args.firstIndex(of: "serve")
+        #expect(flagIndex! < commandIndex!)
+    }
+
+    @Test
+    func stagedValidateAlsoPutsItsFlagFirst() {
+        // UpdateManager builds ["-workspace", path, "validate", "-o", "json"]
+        // for the same reason. Documented here so the two invocations are not
+        // "fixed" into disagreeing with each other.
+        let args = ["-workspace", workspace.path, "validate", "-o", "json"]
+        #expect(args.firstIndex(of: "-workspace")! < args.firstIndex(of: "validate")!)
     }
 
     @Test
