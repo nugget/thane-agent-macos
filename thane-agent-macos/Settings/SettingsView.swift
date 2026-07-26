@@ -236,8 +236,14 @@ struct LocalServerSettingsView: View {
         switch manager.state {
         case .running:
             Button("Stop", role: .destructive) { manager.stop() }
-        case .stopped, .crashed, .refused:
+        case .stopped, .crashed:
             Button("Start") { manager.start() }
+                .disabled(manager.binaryURL == nil)
+        case .refused:
+            // Matches Process Health: this is a retry after fixing the
+            // instance, not a normal start, and thane will refuse again
+            // until the workspace is repaired.
+            Button("Retry") { manager.start() }
                 .disabled(manager.binaryURL == nil)
         case .starting:
             ProgressView().scaleEffect(0.7)

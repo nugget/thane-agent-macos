@@ -628,8 +628,15 @@ final class BinaryManager {
         statsTask = nil
         processStats = ProcessStats()
 
+        // Clear the handlers, then read what is still buffered. thane writes
+        // the refusal immediately before exiting, so the final chunk may not
+        // have been delivered when terminationHandler fires — and that chunk
+        // is precisely the part worth keeping.
         stdoutPipe?.fileHandleForReading.readabilityHandler = nil
         stderrPipe?.fileHandleForReading.readabilityHandler = nil
+        if let remaining = Self.drainRemaining(stderrPipe) {
+            append(remaining, isError: true)
+        }
         stdoutPipe = nil
         stderrPipe = nil
         process = nil
@@ -663,6 +670,23 @@ final class BinaryManager {
         if !clean && code != Self.terminalExitCode && shouldRun {
             scheduleRestart()
         }
+    }
+
+    /// Read whatever is still buffered in a pipe whose process has exited.
+    ///
+    /// The write end must be closed first: the parent holds its own copy, so
+    /// with the child gone there is still no EOF and the read would block on
+    /// a writer that will never write. Closing it makes EOF certain, and
+    /// nothing else can be writing by then.
+    nonisolated private static func drainRemaining(_ pipe: Pipe?) -> String? {
+        guard let pipe else { return nil }
+        try? pipe.fileHandleForWriting.close()
+        guard let data = try? pipe.fileHandleForReading.readToEnd(),
+              !data.isEmpty,
+              let text = String(data: data, encoding: .utf8),
+              !text.isEmpty
+        else { return nil }
+        return text
     }
 
     /// Extract the refusal thane printed from a run's captured stderr.

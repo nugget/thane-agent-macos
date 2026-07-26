@@ -454,9 +454,16 @@ final class UpdateManager {
     /// from the workspace and name it with `-workspace`.
     ///
     /// Fail-open for binaries that predate `validate`: when the staged binary
-    /// returns no parseable JSON report, the gate is skipped (the update
-    /// proceeds) rather than wedging on an ambiguous non-zero exit. Only a
-    /// parseable `{"valid": false}` report blocks the cutover.
+    /// returns no parseable JSON report *and* exits with an ambiguous status,
+    /// the gate is skipped rather than wedging the update.
+    ///
+    /// Exit 78 is not ambiguous, and it is checked before the report's `valid`
+    /// field rather than after. `valid` describes the config file alone — it is
+    /// set from whether the config parsed — while the integrity verdict rides
+    /// on the exit code. A loadable config inside an unverifiable core
+    /// therefore prints `{"valid": true}` and exits 78, so trusting the field
+    /// would cut over to a binary that refuses to serve on first start,
+    /// replacing a working install with a stopped one.
     private func validateStagedConfig(binary: URL, binaryManager: BinaryManager) async throws -> ConfigValidationResult {
         let workspace = binaryManager.workspaceURL
         let args = ["-workspace", workspace.path, "validate", "-o", "json"]
@@ -465,7 +472,14 @@ final class UpdateManager {
             try Self.runStagedProcess(executable: binary, arguments: args, workingDirectory: workspace)
         }.value
 
-        guard let report = Self.parseValidateReport(outcome.stdout) else {
+        let report = Self.parseValidateReport(outcome.stdout)
+
+        if outcome.exitCode == BinaryManager.terminalExitCode {
+            logger.warning("Staged binary refused this workspace (exit 78); blocking cutover")
+            return .invalid(reason: Self.refusalReason(report: report, stderr: outcome.stderr))
+        }
+
+        guard let report else {
             // No structured report: the staged binary likely predates the
             // `validate` subcommand, or it failed in an unexpected way. Don't
             // block the update on an ambiguous signal — proceed, but note it.
@@ -480,6 +494,24 @@ final class UpdateManager {
         let reason = report.error.flatMap { $0.isEmpty ? nil : $0 }
             ?? "The new version rejected the current config."
         return .invalid(reason: reason)
+    }
+
+    /// Explain a refusal in the update dialog, preferring the structured
+    /// integrity report over raw stderr — it carries each failing check with
+    /// the command that fixes it, which is what the operator has to act on.
+    nonisolated static func refusalReason(report: ValidateReport?, stderr: String) -> String {
+        if let failures = report?.integrity?.failures, !failures.isEmpty {
+            let detail = failures.map { check in
+                let fix = check.fix.flatMap { $0.isEmpty ? nil : "\n    fix: \($0)" } ?? ""
+                return "  \(check.name): \(check.detail ?? "failed")\(fix)"
+            }.joined(separator: "\n")
+            return "The new version refuses to serve this workspace:\n\n\(detail)"
+        }
+        if let loadError = report?.error, !loadError.isEmpty {
+            return loadError
+        }
+        let tail = BinaryManager.refusalSummary(fromStderr: stderr.components(separatedBy: .newlines))
+        return tail ?? "The new version refuses to serve this workspace (exit 78)."
     }
 
     /// Output of a staged-binary subprocess run.
@@ -542,8 +574,36 @@ final class UpdateManager {
     /// authoritative signal; its absence means the binary doesn't speak it.
     nonisolated struct ValidateReport: Decodable, Equatable, Sendable {
         let path: String?
+        /// Whether the config *parsed*. Not the integrity verdict — that is
+        /// carried by `integrity` and by the process exit code.
         let valid: Bool
         let error: String?
+        let integrity: Integrity?
+
+        /// The core integrity report, mirroring `coreintegrity.Report`.
+        nonisolated struct Integrity: Decodable, Equatable, Sendable {
+            let corePath: String?
+            let checks: [Check]?
+
+            enum CodingKeys: String, CodingKey {
+                case corePath = "core_path"
+                case checks
+            }
+
+            nonisolated struct Check: Decodable, Equatable, Sendable {
+                let name: String
+                let status: String
+                let detail: String?
+                let fix: String?
+            }
+
+            /// Checks that did not pass. A skipped check is not a pass: it
+            /// means the requirement went unverified because a prerequisite
+            /// failed, which the boot gate treats as failure too.
+            var failures: [Check] {
+                (checks ?? []).filter { $0.status != "pass" }
+            }
+        }
     }
 
     /// Decode a `thane validate -o json` report from captured stdout. Returns

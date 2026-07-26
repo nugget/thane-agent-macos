@@ -70,10 +70,12 @@ If you want Thane to live on the same Mac as the companion app, let the app inst
 
 1. Open **Settings → Local**
 2. The app auto-discovers `thane` in `~/Thane/bin/`, `/usr/local/bin/`, `/opt/homebrew/bin/`, and `~/.local/bin/`. If none is present, the **Binary Updates** section downloads a signed `.pkg` directly from the [thane-ai-agent releases](https://github.com/nugget/thane-ai-agent/releases) — SHA-256 checksum + pkg signature both verified before install
-3. Point **Workspace** at your Thane directory (defaults to `~/Thane/`, where the binary also looks for `config.yaml`) and drop in a `config.yaml` with your LLM provider + Home Assistant connection details
+3. Point **Workspace** at your Thane directory (defaults to `~/Thane/`). The app launches `thane serve -workspace <path>`; Thane reads its config from `<workspace>/core/config.yaml`, where it is signed and version-controlled. `thane init` creates a workspace in that shape
 4. Click **Start**
 
 Once running, **Process Health** shows live resource stats, code-signature provenance, and restart controls. **Binary Updates** pulls newer signed releases when they land on GitHub; the app atomically stops the process, swaps the binary, and restarts it.
+
+Thane verifies its core before serving and refuses to start on a workspace it cannot verify — an unsigned config, uncommitted changes to tracked files, a core that isn't a git repository. Because retrying cannot fix any of those, the app does not restart on a refusal: it shows **Refused to Start**, prints Thane's own report naming each failing check and the command that repairs it, and offers **Retry** once you've fixed the workspace. `thane validate` prints the same report without starting anything.
 
 When a local Thane is running, the app auto-connects to `localhost` and prefers it over any remote URL you've configured — so you can keep a Remote entry as a fallback for when the local process is stopped.
 

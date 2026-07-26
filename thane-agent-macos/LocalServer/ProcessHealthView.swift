@@ -188,7 +188,7 @@ struct ProcessHealthView: View {
                 }
                 .frame(maxHeight: 180)
                 .padding(8)
-                .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 6))
+                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
                 .padding(.horizontal, 16)
             }
         }
