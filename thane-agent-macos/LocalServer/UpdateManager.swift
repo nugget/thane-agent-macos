@@ -449,10 +449,9 @@ final class UpdateManager {
         case invalid(reason: String)
     }
 
-    /// Run the staged binary's `validate` subcommand against the config the
-    /// running binary would load, mirroring `BinaryManager.start()`: execute
-    /// from the workspace (so thane's CWD-based discovery matches) and pass
-    /// `-config` only when an explicit path is configured.
+    /// Run the staged binary's `validate` subcommand against the instance the
+    /// running binary would serve, mirroring `BinaryManager.start()`: execute
+    /// from the workspace and name it with `-workspace`.
     ///
     /// Fail-open for binaries that predate `validate`: when the staged binary
     /// returns no parseable JSON report, the gate is skipped (the update
@@ -460,13 +459,7 @@ final class UpdateManager {
     /// parseable `{"valid": false}` report blocks the cutover.
     private func validateStagedConfig(binary: URL, binaryManager: BinaryManager) async throws -> ConfigValidationResult {
         let workspace = binaryManager.workspaceURL
-        let explicitConfig = binaryManager.configURL
-
-        var args: [String] = []
-        if let configPath = explicitConfig?.path {
-            args += ["-config", configPath]
-        }
-        args += ["validate", "-o", "json"]
+        let args = ["-workspace", workspace.path, "validate", "-o", "json"]
 
         let outcome = try await Task.detached(priority: .userInitiated) {
             try Self.runStagedProcess(executable: binary, arguments: args, workingDirectory: workspace)

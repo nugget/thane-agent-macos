@@ -203,20 +203,21 @@ final class BinaryManager {
         }
     }
 
-    /// Working directory for the thane process. Thane's config discovery
-    /// includes CWD, so ~/Thane/config.yaml is found automatically when
-    /// workspaceURL is ~/Thane/. Defaults to ~/Thane/ on first run.
+    /// The thane instance this app supervises, passed as `-workspace`.
+    /// Thane resolves its config to `<workspace>/core/config.yaml`, where it
+    /// is signed and version-controlled. Defaults to ~/Thane/ on first run.
     var workspaceURL: URL {
         didSet {
             UserDefaults.standard.set(workspaceURL.path, forKey: "workspacePath")
         }
     }
 
-    /// Explicit config path. Leave nil to rely on CWD + thane's discovery order.
-    var configURL: URL? {
-        didSet {
-            UserDefaults.standard.set(configURL?.path, forKey: "configPath")
-        }
+    /// The config thane will load for this workspace. Derived, never chosen:
+    /// the only config thane can verify against its signed history is the one
+    /// inside core, so pointing the app elsewhere would mean launching an
+    /// instance that cannot pass its own startup gate.
+    var coreConfigURL: URL {
+        Self.coreConfigURL(workspace: workspaceURL)
     }
 
     private(set) var codeSignature: AppleCodeSignature?
@@ -288,6 +289,24 @@ final class BinaryManager {
         ]
     }
 
+    // MARK: - Invocation
+
+    /// Argument vector for `thane serve` against `workspace`.
+    ///
+    /// Thane parses argv by hand and ignores flags it does not recognize when
+    /// a subcommand is already set, so a misspelled flag is dropped silently
+    /// rather than rejected — `--workspace` would leave the binary resolving
+    /// its instance from the working directory instead. Built here so the
+    /// exact spelling is asserted in tests.
+    nonisolated static func serveArguments(workspace: URL) -> [String] {
+        ["serve", "-workspace", workspace.path]
+    }
+
+    /// The config thane resolves for `workspace`: `<workspace>/core/config.yaml`.
+    nonisolated static func coreConfigURL(workspace: URL) -> URL {
+        workspace.appending(components: "core", "config.yaml")
+    }
+
     // MARK: - Init
 
     init() {
@@ -304,9 +323,10 @@ final class BinaryManager {
         workspaceURL = UserDefaults.standard.string(forKey: "workspacePath")
             .map { URL(fileURLWithPath: $0) }
             ?? URL.homeDirectory.appending(path: "Thane")
-        if let path = UserDefaults.standard.string(forKey: "configPath") {
-            configURL = URL(fileURLWithPath: path)
-        }
+        // Drop the config override persisted by earlier versions. Thane no
+        // longer accepts one without -insecure-config, and an instance
+        // launched that way is outside the trust boundary by construction.
+        UserDefaults.standard.removeObject(forKey: "configPath")
         refreshState()
         updateBinaryMtime()
         Task { await refreshCodeSignature() }
@@ -349,16 +369,16 @@ final class BinaryManager {
         state = .starting
         detectedVersion = nil
         lastCPUSample = nil
-        localConfig = LocalThaneConfig.parse(at: configURL ?? workspaceURL.appending(path: "config.yaml"))
+        localConfig = LocalThaneConfig.parse(at: coreConfigURL)
 
         let proc = Process()
         proc.executableURL = url
         proc.currentDirectoryURL = workspaceURL
-        var args = ["serve"]
-        if let configPath = configURL?.path {
-            args += ["--config", configPath]
-        }
-        proc.arguments = args
+        // Name the instance rather than the config file. Thane derives the
+        // config from the workspace and verifies it against core's signed
+        // history before serving; handing it a path instead would either be
+        // ignored or, with -insecure-config, skip that check entirely.
+        proc.arguments = Self.serveArguments(workspace: workspaceURL)
 
         let out = Pipe()
         let err = Pipe()

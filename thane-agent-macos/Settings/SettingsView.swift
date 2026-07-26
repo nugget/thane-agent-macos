@@ -175,21 +175,11 @@ struct LocalServerSettingsView: View {
                     label: "Workspace",
                     url: manager.workspaceURL,
                     placeholder: "~/Thane/",
-                    hint: "Working directory — thane finds config.yaml here automatically",
+                    hint: "Thane instance — config is read from core/config.yaml here",
                     startingDirectory: manager.workspaceURL,
                     canChooseFiles: false,
                     canChooseDirectories: true,
                     onPick: { manager.workspaceURL = $0 }
-                )
-                pathRow(
-                    label: "Config",
-                    url: manager.configURL,
-                    placeholder: "Auto (CWD + thane's discovery order)",
-                    hint: "Override only if config.yaml isn't in the workspace",
-                    startingDirectory: manager.configURL?.deletingLastPathComponent() ?? manager.workspaceURL,
-                    canChooseFiles: true,
-                    canChooseDirectories: false,
-                    onPick: { manager.configURL = $0 }
                 )
             }
 
