@@ -133,6 +133,7 @@ final class BinaryManager {
         case starting
         case running(pid: Int32)
         case crashed(code: Int32)
+        case refused            // exit 78: thane declined to serve, retrying cannot help
 
         var label: String {
             switch self {
@@ -141,6 +142,7 @@ final class BinaryManager {
             case .starting:         "Starting..."
             case .running:          "Running"
             case .crashed(let c):   "Crashed (exit \(c))"
+            case .refused:          "Refused to Start"
             }
         }
 
@@ -150,12 +152,19 @@ final class BinaryManager {
         }
     }
 
+    /// Exit status thane uses for a failure a restart cannot fix: an unverified
+    /// core, an unsigned config, a malformed command line. It is sysexits.h
+    /// EX_CONFIG, and it exists so supervisors stop retrying — restarting on it
+    /// turns one clear, actionable error into an endless stream of them.
+    nonisolated static let terminalExitCode: Int32 = 78
+
     // MARK: - Health
 
     enum HealthStatus: String {
         case healthy   = "Healthy"
         case degraded  = "Degraded"
         case crashLoop = "Crash Loop"
+        case blocked   = "Needs Attention"
         case stopped   = "Stopped"
     }
 
@@ -230,6 +239,12 @@ final class BinaryManager {
     private(set) var processStats = ProcessStats()
     private(set) var recentCrashCount = 0
 
+    /// What thane printed when it refused to serve — the failing integrity
+    /// checks and the commands that fix them. Surfaced verbatim: these are
+    /// repaired with git outside the app, so the operator needs thane's own
+    /// instructions, not our paraphrase of them.
+    private(set) var refusalMessage: String?
+
     var healthStatus: HealthStatus {
         switch state {
         case .running:
@@ -240,6 +255,10 @@ final class BinaryManager {
             return .degraded
         case .starting:
             return recentCrashCount >= 3 ? .crashLoop : .healthy
+        case .refused:
+            // Not a crash loop: nothing is looping, and nothing will until a
+            // human fixes the instance.
+            return .blocked
         case .stopped, .notConfigured:
             return .stopped
         }
@@ -263,6 +282,11 @@ final class BinaryManager {
     private var isPerformingMaintenance = false
     private var restartAttempt = 0
     private var recentCrashTimestamps: [Date] = []
+    /// Tail of the current run's stderr, kept so a refusal can be reported with
+    /// the text thane actually printed. Bounded — a refusal is a few dozen
+    /// lines and this must not grow with a chatty long-running process.
+    private var recentStderr: [String] = []
+    private static let stderrTailLimit = 80
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "binary")
 
     /// Whether the server should be running. Persisted across launches.
@@ -369,6 +393,8 @@ final class BinaryManager {
         state = .starting
         detectedVersion = nil
         lastCPUSample = nil
+        refusalMessage = nil
+        recentStderr.removeAll()
         localConfig = LocalThaneConfig.parse(at: coreConfigURL)
 
         let proc = Process()
@@ -615,6 +641,17 @@ final class BinaryManager {
             recentCrashCount = 0
             state = .stopped
             append("thane stopped", isError: false)
+        } else if code == Self.terminalExitCode {
+            // thane examined the instance and declined to serve it. The same
+            // input will produce the same refusal every time, so restarting
+            // would replace one actionable error with a stream of identical
+            // ones and bury the fix instructions in the log.
+            recentCrashTimestamps.removeAll()
+            recentCrashCount = 0
+            refusalMessage = Self.refusalSummary(fromStderr: recentStderr)
+            shouldRun = false
+            state = .refused
+            logger.error("thane refused to start (exit \(code)); not retrying")
         } else {
             recentCrashTimestamps.append(Date())
             pruneStaleCrashes()
@@ -623,9 +660,35 @@ final class BinaryManager {
             logger.error("thane crashed, exit code \(code)")
         }
 
-        if !clean && shouldRun {
+        if !clean && code != Self.terminalExitCode && shouldRun {
             scheduleRestart()
         }
+    }
+
+    /// Extract the refusal thane printed from a run's captured stderr.
+    ///
+    /// Returns the text from the "refusing to start:" line onward, which is
+    /// where the failing check names and their fixes begin. Startup logging
+    /// would only bury the part that tells the operator what to do.
+    ///
+    /// Anchored on the line that *begins* with the marker, not one that merely
+    /// contains it: thane also logs a structured "refusing to start" record
+    /// with the check names as fields. That goes to stdout today while the
+    /// human message goes to stderr, but matching on the prefix means this
+    /// still picks the readable one if the streams are ever merged.
+    ///
+    /// Falls back to the whole tail when the marker is absent, since exit 78
+    /// also covers bad flags and unloadable configs.
+    nonisolated static func refusalSummary(fromStderr lines: [String]) -> String? {
+        let trimmed = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+        guard !trimmed.isEmpty else { return nil }
+        let marker = "refusing to start:"
+        if let start = trimmed.firstIndex(where: {
+            $0.trimmingCharacters(in: .whitespaces).hasPrefix(marker)
+        }) {
+            return trimmed[start...].joined(separator: "\n")
+        }
+        return trimmed.joined(separator: "\n")
     }
 
     private func scheduleRestart() {
@@ -644,6 +707,15 @@ final class BinaryManager {
     }
 
     private func append(_ text: String, isError: Bool) {
+        if isError {
+            // Keep the raw lines, not the trimmed ones: thane indents each
+            // fix under the check it belongs to, and flattening that makes
+            // the refusal noticeably harder to read.
+            recentStderr.append(contentsOf: text.components(separatedBy: .newlines))
+            if recentStderr.count > Self.stderrTailLimit {
+                recentStderr.removeFirst(recentStderr.count - Self.stderrTailLimit)
+            }
+        }
         for line in text.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { continue }

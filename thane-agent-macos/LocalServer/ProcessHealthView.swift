@@ -175,6 +175,22 @@ struct ProcessHealthView: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(.red)
             }
+
+            if case .refused = manager.state, let message = manager.refusalMessage {
+                // Verbatim, scrollable, selectable: the fixes are git commands
+                // the operator runs elsewhere, so they need to be copyable and
+                // must not be reflowed.
+                ScrollView {
+                    Text(message)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 180)
+                .padding(8)
+                .background(.quaternary.opacity(0.5), in: .rect(cornerRadius: 6))
+                .padding(.horizontal, 16)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -190,6 +206,12 @@ struct ProcessHealthView: View {
             case .stopped, .crashed:
                 Button("Start") { manager.start() }
                     .disabled(manager.binaryURL == nil)
+            case .refused:
+                Button("Retry") { manager.start() }
+                    .disabled(manager.binaryURL == nil)
+                Text("Fix the instance first — thane will refuse again until you do")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             case .starting:
                 ProgressView()
                     .controlSize(.small)
@@ -215,6 +237,7 @@ struct ProcessHealthView: View {
         case .healthy:   .green
         case .degraded:  .yellow
         case .crashLoop: .red
+        case .blocked:   .orange
         case .stopped:   .secondary
         }
     }
@@ -222,6 +245,7 @@ struct ProcessHealthView: View {
     private var stoppedIcon: String {
         switch manager.state {
         case .crashed:       "exclamationmark.triangle"
+        case .refused:       "hand.raised.slash"
         case .notConfigured: "questionmark.circle"
         default:             "stop.circle"
         }
@@ -230,6 +254,7 @@ struct ProcessHealthView: View {
     private var stoppedLabel: String {
         switch manager.state {
         case .crashed:       "Process crashed"
+        case .refused:       "thane refused to start"
         case .notConfigured: "No binary configured"
         default:             "Process stopped"
         }

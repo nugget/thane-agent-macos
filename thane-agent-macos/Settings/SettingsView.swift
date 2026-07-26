@@ -226,6 +226,7 @@ struct LocalServerSettingsView: View {
         case .running:          .green
         case .starting:         .yellow
         case .crashed:          .red
+        case .refused:          .orange
         case .stopped, .notConfigured: .secondary
         }
     }
@@ -235,7 +236,7 @@ struct LocalServerSettingsView: View {
         switch manager.state {
         case .running:
             Button("Stop", role: .destructive) { manager.stop() }
-        case .stopped, .crashed:
+        case .stopped, .crashed, .refused:
             Button("Start") { manager.start() }
                 .disabled(manager.binaryURL == nil)
         case .starting:
