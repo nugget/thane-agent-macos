@@ -24,6 +24,7 @@ struct AboutView: View {
                         Text(AppVersion.aboutVersion)
                         Image(systemName: versionCopyFeedback.symbol)
                             .foregroundStyle(versionCopyFeedback.color)
+                            .frame(width: 16, height: 16)
                             .contentTransition(.symbolEffect(.replace))
                     }
                     .contentShape(.rect)
