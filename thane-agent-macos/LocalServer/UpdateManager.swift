@@ -444,6 +444,7 @@ final class UpdateManager {
 
     // MARK: - Private: Config Validation Gate
 
+<<<<<<< HEAD
     private enum ConfigValidationResult {
         case valid
         case invalid(reason: String)
@@ -614,6 +615,42 @@ final class UpdateManager {
         return try? JSONDecoder().decode(ValidateReport.self, from: data)
     }
 
+=======
+    /// Run the staged binary's `validate` subcommand against the workspace's
+    /// canonical signed config, mirroring `BinaryManager.start()`.
+    ///
+    /// When the canonical config exists, the staged binary must validate it
+    /// successfully. On first install there is no active config yet, but the
+    /// binary must still emit a non-empty signed-core integrity report.
+    private func validateStagedConfig(
+        binary: URL,
+        binaryManager: BinaryManager
+    ) async throws -> StagedConfigValidationResult {
+        let workspace = binaryManager.workspaceURL
+        let args = ThaneInvocation.validationArguments(workspace: workspace)
+        let canonicalConfigURL = ThaneInvocation.canonicalConfigURL(workspace: workspace)
+
+        let result = try await Task.detached(priority: .userInitiated) {
+            let workingDirectory = ThaneInvocation.commandWorkingDirectory(for: workspace)
+            let canonicalConfigExists = FileManager.default.fileExists(
+                atPath: canonicalConfigURL.path
+            )
+            let outcome = try ThaneProcessRunner.run(
+                executable: binary,
+                arguments: args,
+                workingDirectory: workingDirectory,
+                ensureExecutable: true
+            )
+            return (outcome, canonicalConfigExists)
+        }.value
+
+        return StagedConfigValidationPolicy.evaluate(
+            outcome: result.0,
+            canonicalConfigExists: result.1
+        )
+    }
+
+>>>>>>> origin/main
     private func downloadFile(from url: URL) async throws -> URL {
         let delegate = DownloadDelegate(tempFileExtension: "pkg") { [weak self] fraction in
             Task { @MainActor [weak self] in
@@ -773,17 +810,6 @@ final class UpdateManager {
     }
 }
 
-// MARK: - Staged Output Box
-
-/// Reference box for handing a drained pipe's bytes back from a background
-/// reader thread. `data` is written once on that thread and read only after a
-/// `DispatchSemaphore` signal establishes the happens-before, so the unchecked
-/// Sendable conformance is sound. Nonisolated so the background queue can touch
-/// it under the app's MainActor-default isolation.
-nonisolated private final class StagedOutputBox: @unchecked Sendable {
-    var data = Data()
-}
-
 // MARK: - Errors
 
 enum UpdateError: LocalizedError {
@@ -817,4 +843,3 @@ enum UpdateError: LocalizedError {
         }
     }
 }
-

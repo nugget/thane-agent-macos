@@ -32,10 +32,10 @@ It's designed as the *Mac-shaped* front end for Thane: not a chat client on the 
 
 Working today:
 
-- **Chat client** — Menu bar presence, Dashboard window, conversation history (SwiftData)
+- **Native operator app** — Searchable conversation history, keyboard command menu, menu bar controls, native server panels, and a first-class web Dashboard window
 - **WebSocket transport** — Auth handshake and platform request routing to a Thane server
 - **Binary update manager** — GitHub release polling, signed pkg install, SHA-256 verification, atomic stop/restart
-- **Process Health** — Live resource stats, code-signature inspection, installer provenance
+- **Signed-core supervision** — Preflight validation of `core/config.yaml`, terminal exit handling, repair guidance, live resource stats, code-signature inspection, and installer provenance
 
 Nascent:
 
@@ -70,10 +70,15 @@ If you want Thane to live on the same Mac as the companion app, let the app inst
 
 1. Open **Settings → Local**
 2. The app auto-discovers `thane` in `~/Thane/bin/`, `/usr/local/bin/`, `/opt/homebrew/bin/`, and `~/.local/bin/`. If none is present, the **Binary Updates** section downloads a signed `.pkg` directly from the [thane-ai-agent releases](https://github.com/nugget/thane-ai-agent/releases) — SHA-256 checksum + pkg signature both verified before install
+<<<<<<< HEAD
 3. Point **Workspace** at your Thane directory (defaults to `~/Thane/`). The app launches `thane serve -workspace <path>`; Thane reads its config from `<workspace>/core/config.yaml`, where it is signed and version-controlled. `thane init` creates a workspace in that shape
 4. Click **Start**
+=======
+3. Point **Workspace** at your Thane directory (defaults to `~/Thane/`). A current Thane instance keeps its signed runtime config at `core/config.yaml`; `thane init ~/Thane` creates that core, or the app can initialize it when startup finds a missing workspace
+4. Click **Check & Start**. The app runs the same structured preflight as `thane validate`, then starts only when the config and signed core pass
+>>>>>>> origin/main
 
-Once running, **Process Health** shows live resource stats, code-signature provenance, and restart controls. **Binary Updates** pulls newer signed releases when they land on GitHub; the app atomically stops the process, swaps the binary, and restarts it.
+Once running, **Local Thane** shows live resource stats, signed-core status, code-signature provenance, recent activity, and restart controls. Optional Apple notifications can surface warnings quietly or errors actively, with separate controls for privacy, sound, repetition, retention, foreground delivery, and temporary muting. Repeated incidents replace themselves, bursts are summarized, and selecting a notification opens the relevant Process Health view. A terminal configuration failure (exit 78) pauses automatic restart and presents Thane's exact findings and repair commands instead of creating a crash loop. **Binary Updates** pulls newer signed releases when they land on GitHub; the app validates the active workspace with the staged binary before it atomically stops the process, swaps the binary, and restarts it.
 
 Thane verifies its core before serving and refuses to start on a workspace it cannot verify — an unsigned config, uncommitted changes to tracked files, a core that isn't a git repository. Because retrying cannot fix any of those, the app does not restart on a refusal: it shows **Refused to Start**, prints Thane's own report naming each failing check and the command that repairs it, and offers **Retry** once you've fixed the workspace. `thane validate` prints the same report without starting anything.
 
@@ -111,7 +116,7 @@ Release notes and artifacts live at [Releases](https://github.com/nugget/thane-a
 - **Connection** — `ServerConnection.swift` (WebSocket client with auth handshake and platform request routing)
 - **Platform services** — `PlatformServiceRouter.swift` dispatches requests to registered providers (currently: `CalendarService`, `ContactsService`)
 - **Chat** — SwiftUI chat view backed by SwiftData (`Conversation`, `ChatMessage`)
-- **Process Health** — Live resource stats and code-signature summary
+- **Local Thane** — Signed-core preflight, terminal-failure guidance, live resource stats, bounded recent activity, nuanced warning/error notifications, and code-signature summary
 
 ## Related
 

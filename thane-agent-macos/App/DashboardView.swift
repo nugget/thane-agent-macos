@@ -7,6 +7,15 @@ struct DashboardView: View {
     var body: some View {
         if let url = appState.dashboardURL {
             WebView(url: url)
+                .navigationTitle("Thane Dashboard")
+                .toolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        Link(destination: url) {
+                            Label("Open in Browser", systemImage: "safari")
+                        }
+                        .help("Open Dashboard in Default Browser")
+                    }
+                }
         } else {
             ContentUnavailableView {
                 Label("No Server Available", systemImage: "server.rack")
@@ -23,7 +32,10 @@ private struct WebView: NSViewRepresentable {
     let url: URL
 
     func makeNSView(context: Context) -> WKWebView {
-        let webView = WKWebView()
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .default()
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.allowsMagnification = true
         webView.load(URLRequest(url: url))
         return webView
     }

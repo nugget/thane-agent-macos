@@ -12,11 +12,12 @@ struct ChatView: View {
     @State private var inputText = ""
 
     var body: some View {
-        VStack(spacing: 0) {
-            messageList
-            Divider()
-            inputBar
-        }
+        messageList
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Divider()
+                inputBar
+                    .background(.bar)
+            }
         .navigationTitle(conversation.title)
         .navigationSubtitle(appState.statusText)
         .onAppear { resetViewModel() }
@@ -30,7 +31,11 @@ struct ChatView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
+                LazyVStack(alignment: .leading, spacing: 14) {
+                    if conversation.sortedMessages.isEmpty {
+                        conversationWelcome
+                    }
+
                     ForEach(conversation.sortedMessages) { message in
                         MessageBubble(message: message)
                             .id(message.id)
@@ -49,8 +54,12 @@ struct ChatView: View {
                         errorBanner(error)
                     }
                 }
-                .padding()
+                .frame(maxWidth: 820)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 20)
+                .frame(maxWidth: .infinity)
             }
+            .background(Color(nsColor: .textBackgroundColor).opacity(0.35))
             .onChange(of: conversation.sortedMessages.count) {
                 scrollToBottom(proxy: proxy)
             }
@@ -60,31 +69,91 @@ struct ChatView: View {
         }
     }
 
+    private var conversationWelcome: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 28))
+                .foregroundStyle(.tint)
+                .frame(width: 54, height: 54)
+                .background(.tint.opacity(0.1), in: Circle())
+
+            Text("Start a conversation")
+                .font(.title3.weight(.semibold))
+
+            Text("Thane can reason with the context, tools, and Apple capabilities you’ve chosen to share.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 440)
+
+            if viewModel != nil {
+                HStack(spacing: 8) {
+                    suggestion("What should I know today?")
+                    suggestion("Show me what you can do")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+    }
+
+    private func suggestion(_ text: String) -> some View {
+        Button(text) {
+            inputText = text
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+
     private func errorBanner(_ message: String) -> some View {
-        HStack {
-            Image(systemName: "exclamationmark.triangle")
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.red)
             Text(message)
                 .font(.callout)
+                .textSelection(.enabled)
+            Spacer()
         }
-        .foregroundStyle(.red)
-        .padding(.horizontal)
+        .padding(12)
+        .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
     }
 
     // MARK: - Input Bar
 
     private var inputBar: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            TextField("Message", text: $inputText, axis: .vertical)
-                .textFieldStyle(.plain)
-                .lineLimit(1...8)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background(.background.secondary)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+        VStack(alignment: .leading, spacing: 8) {
+            if viewModel == nil {
+                HStack {
+                    Label("Connect to a server before sending a message.", systemImage: "bolt.slash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    SettingsLink {
+                        Text("Connection Settings…")
+                    }
+                    .controlSize(.small)
+                }
+            }
 
-            sendButton
+            HStack(alignment: .bottom, spacing: 10) {
+                TextField("Message Thane", text: $inputText, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...8)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 9)
+                    .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(.separator.opacity(0.5))
+                    }
+
+                sendButton
+            }
         }
-        .padding()
+        .frame(maxWidth: 840)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+        .frame(maxWidth: .infinity)
     }
 
     private var sendButton: some View {
@@ -92,7 +161,7 @@ struct ChatView: View {
             Image(systemName: viewModel?.isStreaming == true
                   ? "stop.circle.fill"
                   : "arrow.up.circle.fill")
-                .font(.title2)
+                .font(.system(size: 28))
                 .foregroundStyle(canSend ? Color.accentColor : Color.secondary)
         }
         .buttonStyle(.plain)
@@ -102,7 +171,9 @@ struct ChatView: View {
     }
 
     private var canSend: Bool {
-        viewModel?.isStreaming == true || !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        guard viewModel != nil else { return false }
+        return viewModel?.isStreaming == true
+            || !inputText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // MARK: - Actions
