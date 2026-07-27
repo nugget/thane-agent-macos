@@ -18,9 +18,9 @@ struct DashboardView: View {
                 }
         } else {
             ContentUnavailableView {
-                Label("No Server Available", systemImage: "server.rack")
+                Label("Thane Isn’t Available", systemImage: "bolt.horizontal.circle")
             } description: {
-                Text("Start a local server or connect to a remote server to open the dashboard.")
+                Text("Make Thane ready in Settings to open the dashboard.")
             }
         }
     }

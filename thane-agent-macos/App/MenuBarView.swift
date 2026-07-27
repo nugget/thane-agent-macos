@@ -8,24 +8,23 @@ struct MenuBarView: View {
     private var manager: BinaryManager { appState.binaryManager }
 
     var body: some View {
-        Button("Open Thane", systemImage: "macwindow") {
+        Button("Open Chat", systemImage: "bubble.left.and.bubble.right") {
             activate()
             openWindow(id: "main")
         }
 
         Divider()
 
-        connectionStatus
-        localStatus
+        Label(appState.statusText, systemImage: appState.menuBarSymbol)
 
-        Divider()
-
-        if appState.activeServer != nil {
-            Button("Server Status", systemImage: "server.rack") {
+        if appState.managedRuntimeIsRelevant {
+            Button(managedStatusTitle, systemImage: managedStatusIcon) {
                 activate()
-                openWindow(id: "server")
+                openWindow(id: "process-health")
             }
         }
+
+        Divider()
 
         if appState.dashboardURL != nil {
             Button("Web Dashboard", systemImage: "rectangle.3.group") {
@@ -33,12 +32,6 @@ struct MenuBarView: View {
                 openWindow(id: "dashboard")
             }
         }
-
-        Button("Local Thane…", systemImage: localStatusIcon) {
-            activate()
-            openWindow(id: "process-health")
-        }
-        .disabled(manager.state == .notConfigured)
 
         if appState.updateAvailable || appState.appUpdateAvailable {
             Divider()
@@ -53,6 +46,12 @@ struct MenuBarView: View {
             Label("Settings…", systemImage: "gearshape")
         }
 
+        Button("Thane Settings…", systemImage: "gearshape.2") {
+            appState.selectedSettingsTab = .agent
+            showSettings()
+        }
+        .keyboardShortcut(",", modifiers: [.command, .option])
+
         Button("About Thane") {
             activate()
             openWindow(id: "about")
@@ -66,41 +65,24 @@ struct MenuBarView: View {
         .keyboardShortcut("q")
     }
 
-    @ViewBuilder
-    private var connectionStatus: some View {
-        if appState.isConnected {
-            Button("Disconnect", systemImage: "checkmark.circle.fill") {
-                appState.disconnect()
-            }
-        } else {
-            Text(appState.statusText)
-        }
-    }
-
-    @ViewBuilder
-    private var localStatus: some View {
+    private var managedStatusTitle: String {
         switch manager.state {
         case .running:
-            Button("Stop Local Thane", systemImage: "stop.circle") {
-                manager.stop()
-            }
-        case .stopped, .crashed:
-            Button("Check & Start Local Thane", systemImage: "play.circle") {
-                manager.start()
-            }
+            "Agent Health…"
+        case .stopped:
+            "Managed Agent Stopped…"
+        case .crashed:
+            "Managed Agent Crashed…"
         case .needsAttention:
-            Button("Local Thane Needs Attention…", systemImage: "exclamationmark.shield.fill") {
-                activate()
-                openWindow(id: "process-health")
-            }
+            "Managed Agent Needs Attention…"
         case .starting:
-            Text("Verifying Local Thane…")
+            "Verifying Managed Agent…"
         case .notConfigured:
-            Text("Local Thane Not Configured")
+            "Managed Agent"
         }
     }
 
-    private var localStatusIcon: String {
+    private var managedStatusIcon: String {
         switch manager.state {
         case .running: "checkmark.circle.fill"
         case .starting: "checkmark.shield"

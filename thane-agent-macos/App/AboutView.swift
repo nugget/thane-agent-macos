@@ -31,8 +31,9 @@ struct AboutView: View {
 
             // Runtime versions
             VStack(spacing: 6) {
-                if let binaryVersion = manager.detectedVersion {
-                    LabeledContent("Local Binary", value: binaryVersion)
+                if appState.configurationMode == .managed,
+                   let binaryVersion = manager.detectedVersion {
+                    LabeledContent("Managed Thane", value: binaryVersion)
                 }
                 if let serverVersion = appState.connection.serverVersion {
                     LabeledContent("Protocol", value: serverVersion)

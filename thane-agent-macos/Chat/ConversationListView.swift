@@ -65,14 +65,8 @@ struct ConversationListView: View {
             Image(systemName: appState.isConnected ? "checkmark.circle.fill" : "circle")
                 .foregroundStyle(appState.isConnected ? .green : .secondary)
 
-            VStack(alignment: .leading, spacing: 1) {
-                Text(appState.statusText)
-                    .font(.caption.weight(.medium))
-                Text(connectionDetail)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+            Text(appState.statusText)
+                .font(.caption.weight(.medium))
 
             Spacer()
         }
@@ -80,19 +74,6 @@ struct ConversationListView: View {
         .padding(.vertical, 9)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
-    }
-
-    private var connectionDetail: String {
-        if appState.activeServer?.isLocal == true {
-            return "Local Mac"
-        }
-        if let host = appState.activeServer?.baseURL.host {
-            return host
-        }
-        if case .needsAttention = appState.binaryManager.state {
-            return "Local core needs attention"
-        }
-        return "No active server"
     }
 
     // MARK: - Sections

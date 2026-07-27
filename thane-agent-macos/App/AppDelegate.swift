@@ -38,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
 
         let openItem = NSMenuItem(
-            title: "Open Thane",
+            title: "Open Chat",
             action: #selector(openMain),
             keyEquivalent: ""
         )
@@ -55,9 +55,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(item)
         }
 
-        if appState.binaryManager.state != .notConfigured {
+        if appState.managedRuntimeIsRelevant {
             let item = NSMenuItem(
-                title: "Process Health",
+                title: "Agent Health",
                 action: #selector(openConsole),
                 keyEquivalent: ""
             )
@@ -161,7 +161,8 @@ extension AppDelegate: @preconcurrency UNUserNotificationCenterDelegate {
 
     private func showNotificationSettings() {
         NSApp.activate()
-        appState?.selectedSettingsTab = .local
+        appState?.selectConfiguration(.managed)
+        appState?.selectedSettingsTab = .agent
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 }

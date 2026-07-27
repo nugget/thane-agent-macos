@@ -12,11 +12,8 @@ struct SettingsView: View {
             Tab("General", systemImage: "gearshape", value: .general) {
                 GeneralSettingsView()
             }
-            Tab("Remote", systemImage: "network", value: .remote) {
-                ServerSettingsView()
-            }
-            Tab("Local", systemImage: "desktopcomputer", value: .local) {
-                LocalServerSettingsView()
+            Tab("Thane", systemImage: "brain.head.profile", value: .agent) {
+                AgentSettingsView()
             }
             Tab("Permissions", systemImage: "lock.shield", value: .permissions) {
                 PermissionsSettingsView()
@@ -27,7 +24,56 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - Server Tab
+// MARK: - Thane Tab
+
+struct AgentSettingsView: View {
+    @Environment(AppState.self) private var appState
+    @Query(filter: #Predicate<ServerConfig> { $0.isDefault }) private var defaultConfigs: [ServerConfig]
+
+    private var configurationMode: Binding<AgentConfigurationMode> {
+        Binding(
+            get: { appState.configurationMode },
+            set: {
+                appState.selectConfiguration(
+                    $0,
+                    advancedConfig: defaultConfigs.first
+                )
+            }
+        )
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Configuration", selection: configurationMode) {
+                    ForEach(AgentConfigurationMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+
+                Text(appState.configurationMode.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 12)
+
+            Divider()
+
+            switch appState.configurationMode {
+            case .managed:
+                LocalServerSettingsView()
+            case .advanced:
+                ServerSettingsView()
+            }
+        }
+    }
+}
+
+// MARK: - Advanced Connection
 
 struct ServerSettingsView: View {
     @Environment(AppState.self) private var appState
@@ -37,6 +83,7 @@ struct ServerSettingsView: View {
     @State private var serverURL = ""
     @State private var token = ""
     @State private var showToken = false
+    @State private var saveError: String?
 
     private var config: ServerConfig? { configs.first(where: \.isDefault) }
 
@@ -49,7 +96,7 @@ struct ServerSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Connection") {
+            Section("Advanced Connection") {
                 TextField("Base URL", text: $serverURL, prompt: Text("https://pocket.hollowoak.net"))
                     .textFieldStyle(.roundedBorder)
 
@@ -92,15 +139,13 @@ struct ServerSettingsView: View {
 
                     if appState.isConnected {
                         Button("Save & Reconnect") {
-                            saveConfig()
-                            connectToServer()
+                            saveAndConnect()
                         }
                         .disabled(serverURL.isEmpty || token.isEmpty)
                         Button("Disconnect") { appState.disconnect() }
                     } else {
                         Button("Connect") {
-                            saveConfig()
-                            connectToServer()
+                            saveAndConnect()
                         }
                         .disabled(serverURL.isEmpty || token.isEmpty)
                     }
@@ -112,6 +157,11 @@ struct ServerSettingsView: View {
                         .font(.caption)
                 }
 
+                if let saveError {
+                    Text(saveError)
+                        .foregroundStyle(.red)
+                        .font(.caption)
+                }
 
                 if let providerID = appState.connection.providerID {
                     LabeledContent("Provider ID", value: providerID)
@@ -130,7 +180,7 @@ struct ServerSettingsView: View {
         token = config.map { appState.loadToken(for: $0) ?? "" } ?? ""
     }
 
-    private func saveConfig() {
+    private func saveConfig() throws -> ServerConfig {
         let trimmedURL = serverURL.trimmingCharacters(in: .whitespacesAndNewlines)
         let cfg: ServerConfig
         if let existing = config {
@@ -145,16 +195,22 @@ struct ServerSettingsView: View {
         } else {
             appState.deleteToken(for: cfg)
         }
-        try? modelContext.save()
+        try modelContext.save()
+        return cfg
     }
 
-    private func connectToServer() {
-        guard let config else { return }
-        appState.connect(config: config)
+    private func saveAndConnect() {
+        do {
+            let config = try saveConfig()
+            saveError = nil
+            appState.selectConfiguration(.advanced, advancedConfig: config)
+        } catch {
+            saveError = "Couldn’t save this connection: \(error.localizedDescription)"
+        }
     }
 }
 
-// MARK: - Local Server Tab
+// MARK: - Managed Thane
 
 struct LocalServerSettingsView: View {
     @Environment(AppState.self) private var appState
@@ -187,7 +243,7 @@ struct LocalServerSettingsView: View {
                 }
 
                 HStack {
-                    Button("Process Health…", systemImage: "waveform.path.ecg") {
+                    Button("Agent Health…", systemImage: "waveform.path.ecg") {
                         openWindow(id: "process-health")
                     }
                     .disabled(manager.state == .notConfigured)
@@ -213,7 +269,7 @@ struct LocalServerSettingsView: View {
                 } header: {
                     Text("Operator Attention")
                 } footer: {
-                    Text("Automatic restart is paused for terminal exit 78. Process Health shows the exact findings and repair commands.")
+                    Text("Automatic restart is paused for terminal exit 78. Agent Health shows the exact findings and repair commands.")
                 }
             }
 
@@ -897,6 +953,7 @@ struct PermissionsSettingsView: View {
 // MARK: - General Tab
 
 struct GeneralSettingsView: View {
+    @Environment(AppState.self) private var appState
     @State private var loginItemStatus = SMAppService.mainApp.status
 
     private var launchAtLoginBinding: Binding<Bool> {
@@ -918,6 +975,8 @@ struct GeneralSettingsView: View {
     }
 
     var body: some View {
+        @Bindable var appState = appState
+
         Form {
             Section {
                 Toggle("Launch at login", isOn: launchAtLoginBinding)
@@ -934,6 +993,18 @@ struct GeneralSettingsView: View {
                         .font(.caption)
                     }
                 }
+            }
+
+            Section {
+                Picker("Menu bar", selection: $appState.menuBarTextStyle) {
+                    ForEach(MenuBarTextStyle.allCases) { style in
+                        Text(style.title).tag(style)
+                    }
+                }
+            } header: {
+                Text("Menu Bar")
+            } footer: {
+                Text("The icon always reflects connection, attention, and update state. Text can add the current status or managed Thane version.")
             }
 
             Section("Application Updates") {

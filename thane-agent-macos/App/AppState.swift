@@ -13,9 +13,68 @@ nonisolated struct ActiveServer: Sendable, Equatable {
 
 enum AppSettingsTab: Hashable {
     case general
-    case remote
-    case local
+    case agent
     case permissions
+}
+
+nonisolated enum AgentConfigurationMode: String, CaseIterable, Identifiable, Sendable {
+    case managed
+    case advanced
+
+    static let defaultsKey = "agentConfigurationMode"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .managed: "Managed"
+        case .advanced: "Advanced"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .managed: "Thane is installed, verified, and supervised by this app."
+        case .advanced: "Connect to a Thane instance you operate yourself."
+        }
+    }
+}
+
+nonisolated enum MenuBarTextStyle: String, CaseIterable, Identifiable, Sendable {
+    case iconOnly
+    case status
+    case version
+    case statusAndVersion
+
+    static let defaultsKey = "menuBarTextStyle"
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .iconOnly: "Icon Only"
+        case .status: "Status"
+        case .version: "Version"
+        case .statusAndVersion: "Status & Version"
+        }
+    }
+
+    func text(status: String, version: String?) -> String? {
+        switch self {
+        case .iconOnly:
+            nil
+        case .status:
+            status
+        case .version:
+            version ?? status
+        case .statusAndVersion:
+            if let version {
+                "\(status) · \(version)"
+            } else {
+                status
+            }
+        }
+    }
 }
 
 /// Central application state coordinator.
@@ -47,7 +106,20 @@ final class AppState {
     private(set) var contactsAuthorization: ContactsAuthorizationState = .notDetermined
     private(set) var remindersAuthorization: EventKitAuthorizationState = .notDetermined
     var selectedSettingsTab: AppSettingsTab = .general
-
+    let hadStoredConfigurationMode: Bool
+    private(set) var configurationMode: AgentConfigurationMode {
+        didSet {
+            UserDefaults.standard.set(configurationMode.rawValue, forKey: AgentConfigurationMode.defaultsKey)
+            if configurationMode == .managed {
+                binaryManager.autoStartIfNeeded()
+            }
+        }
+    }
+    var menuBarTextStyle: MenuBarTextStyle {
+        didSet {
+            UserDefaults.standard.set(menuBarTextStyle.rawValue, forKey: MenuBarTextStyle.defaultsKey)
+        }
+    }
 
     var connectionState: ServerConnection.State {
         connection.state
@@ -58,24 +130,63 @@ final class AppState {
     }
 
     var statusText: String {
-        switch connection.state {
-        case .disconnected: "Disconnected"
-        case .connecting: "Connecting..."
-        case .authenticating: "Authenticating..."
-        case .connected: "Connected"
-        case .reconnecting(let attempt): "Reconnecting (\(attempt))..."
+        if configurationMode == .managed {
+            switch binaryManager.state {
+            case .starting:
+                return "Starting…"
+            case .stopped:
+                return "Stopped"
+            case .crashed:
+                return "Crashed"
+            case .needsAttention:
+                return "Needs Attention"
+            case .notConfigured:
+                return "Not Configured"
+            case .running:
+                break
+            }
+        }
+        return switch connection.state {
+        case .disconnected: "Unavailable"
+        case .connecting: "Connecting…"
+        case .authenticating: "Authenticating…"
+        case .connected: "Ready"
+        case .reconnecting(let attempt): "Reconnecting (\(attempt))…"
         }
     }
 
     var menuBarSymbol: String {
-        if case .needsAttention = binaryManager.state {
-            return "exclamationmark.shield"
+        if configurationMode == .managed {
+            switch binaryManager.state {
+            case .needsAttention:
+                return "exclamationmark.shield.fill"
+            case .crashed:
+                return "exclamationmark.triangle.fill"
+            case .starting:
+                return "ellipsis.circle"
+            case .stopped:
+                return "pause.circle"
+            default:
+                break
+            }
+        }
+        if updateAvailable || appUpdateAvailable {
+            return "arrow.down.circle.fill"
         }
         return switch connection.state {
         case .connected: "brain.head.profile.fill"
         case .connecting, .authenticating, .reconnecting: "ellipsis.circle"
         case .disconnected: "brain.head.profile"
         }
+    }
+
+    var menuBarText: String? {
+        let version = configurationMode == .managed ? binaryManager.detectedVersion : nil
+        return menuBarTextStyle.text(status: statusText, version: version)
+    }
+
+    var managedRuntimeIsRelevant: Bool {
+        configurationMode == .managed && binaryManager.state != .notConfigured
     }
 
     /// True when the current WebSocket connection is to the local binary.
@@ -94,17 +205,11 @@ final class AppState {
     var openMainWindow: (() -> Void)?
     var openConsoleWindow: (() -> Void)?
     var openDashboardWindow: (() -> Void)?
-    var openServerWindow: (() -> Void)?
     private var shouldOpenProcessHealth = false
 
-    /// Base URL of the currently active server — local takes priority over remote.
-    /// Used by the dashboard window to load the web UI.
-    var dashboardURL: URL? {
-        if binaryManager.state.isRunning {
-            return URL(string: "http://localhost:\(binaryManager.localConfig.nativePort)")
-        }
-        return activeServerURL
-    }
+    /// Base URL of the active Thane configuration.
+    /// Used by the dashboard window without exposing where Thane is running.
+    var dashboardURL: URL? { activeServerURL }
 
     /// Stored when a connection is established so dashboard can open the right URL.
     private(set) var activeServerURL: URL?
@@ -121,6 +226,16 @@ final class AppState {
     }
 
     init() {
+        hadStoredConfigurationMode = UserDefaults.standard.object(
+            forKey: AgentConfigurationMode.defaultsKey
+        ) != nil
+        configurationMode = AgentConfigurationMode(
+            rawValue: UserDefaults.standard.string(forKey: AgentConfigurationMode.defaultsKey) ?? ""
+        ) ?? .managed
+        menuBarTextStyle = MenuBarTextStyle(
+            rawValue: UserDefaults.standard.string(forKey: MenuBarTextStyle.defaultsKey) ?? ""
+        ) ?? .iconOnly
+
         platformRouter.register(
             capability: "macos.calendar",
             handler: CalendarPlatformHandler(calendarService: calendarService)
@@ -152,8 +267,9 @@ final class AppState {
             guard let self else { return }
             switch state {
             case .running:
-                // Only auto-connect locally if not already connected to a remote server
-                if !self.isConnected { self.connectLocal() }
+                if self.configurationMode == .managed, !self.isConnected {
+                    self.connectLocal()
+                }
             case .stopped, .crashed, .needsAttention, .notConfigured:
                 if self.isLocallyConnected { self.disconnect() }
             default:
@@ -162,7 +278,8 @@ final class AppState {
         }
 
         binaryManager.onLogEntry = { [weak self] entry in
-            self?.localNotificationManager.handle(entry)
+            guard let self, self.configurationMode == .managed else { return }
+            self.localNotificationManager.handle(entry)
         }
 
         Task {
@@ -172,7 +289,9 @@ final class AppState {
             await localNotificationManager.refreshAuthorization()
         }
 
-        binaryManager.autoStartIfNeeded()
+        if configurationMode == .managed {
+            binaryManager.autoStartIfNeeded()
+        }
 
         updateManager.startPeriodicChecks { [weak self] in
             self?.binaryManager.detectedVersion
@@ -210,22 +329,58 @@ final class AppState {
         return false
     }
 
+    /// Selects and activates an operator configuration independently of any
+    /// window lifecycle. Changing modes from Settings must take effect even
+    /// when the chat window is closed.
+    func selectConfiguration(
+        _ mode: AgentConfigurationMode,
+        advancedConfig: ServerConfig? = nil
+    ) {
+        configurationMode = mode
+        activateSelectedConfiguration(advancedConfig: advancedConfig)
+    }
+
+    /// Activates the persisted configuration after SwiftData has made the
+    /// optional Advanced connection available to the view layer.
+    func activateSelectedConfiguration(advancedConfig: ServerConfig?) {
+        switch configurationMode {
+        case .managed:
+            if activeServer?.isLocal == false {
+                disconnect()
+            }
+            if binaryManager.state.isRunning {
+                connectLocal()
+            }
+        case .advanced:
+            guard let advancedConfig else {
+                disconnect()
+                return
+            }
+            if activeServer?.isLocal == false, isConnected {
+                return
+            }
+            connect(config: advancedConfig)
+        }
+    }
+
     /// Connect to a remote server using the given config and stored token.
     func connect(config: ServerConfig) {
-        isLocallyConnected = false
-        activeServerURL = config.url
         guard let url = config.url else {
             logger.error("Invalid URL in server config: \(config.urlString)")
+            disconnect()
             return
         }
 
         let tokenKey = "token-\(config.clientID)"
         guard let token = KeychainHelper.load(key: tokenKey) else {
             logger.warning("No token stored for server config \(config.name)")
+            disconnect()
             return
         }
 
         let clientName = Host.current().localizedName ?? "Mac"
+        isLocallyConnected = false
+        activeServerURL = url
         activeServer = ActiveServer(baseURL: url, token: token, isLocal: false)
 
         connection.connect(
@@ -249,6 +404,7 @@ final class AppState {
     /// the companion endpoint isn't configured (or is configured but
     /// missing a usable token).
     func connectLocal() {
+        guard configurationMode == .managed else { return }
         let config = binaryManager.localConfig
         guard config.companionEnabled, let token = config.companionToken else {
             logger.info("Local binary running but companion not configured in config — WebSocket skipped")
