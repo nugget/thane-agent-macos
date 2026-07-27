@@ -154,7 +154,11 @@ final class AppState {
             case .running:
                 // Only auto-connect locally if not already connected to a remote server
                 if !self.isConnected { self.connectLocal() }
+<<<<<<< HEAD
+            case .stopped, .crashed, .refused, .notConfigured:
+=======
             case .stopped, .crashed, .needsAttention, .notConfigured:
+>>>>>>> origin/main
                 if self.isLocallyConnected { self.disconnect() }
             default:
                 break

@@ -444,6 +444,178 @@ final class UpdateManager {
 
     // MARK: - Private: Config Validation Gate
 
+<<<<<<< HEAD
+    private enum ConfigValidationResult {
+        case valid
+        case invalid(reason: String)
+    }
+
+    /// Run the staged binary's `validate` subcommand against the instance the
+    /// running binary would serve, mirroring `BinaryManager.start()`: execute
+    /// from the workspace and name it with `-workspace`.
+    ///
+    /// Fail-open for binaries that predate `validate`: when the staged binary
+    /// returns no parseable JSON report *and* exits with an ambiguous status,
+    /// the gate is skipped rather than wedging the update.
+    ///
+    /// Exit 78 is not ambiguous, and it is checked before the report's `valid`
+    /// field rather than after. `valid` describes the config file alone — it is
+    /// set from whether the config parsed — while the integrity verdict rides
+    /// on the exit code. A loadable config inside an unverifiable core
+    /// therefore prints `{"valid": true}` and exits 78, so trusting the field
+    /// would cut over to a binary that refuses to serve on first start,
+    /// replacing a working install with a stopped one.
+    private func validateStagedConfig(binary: URL, binaryManager: BinaryManager) async throws -> ConfigValidationResult {
+        let workspace = binaryManager.workspaceURL
+        let args = ["-workspace", workspace.path, "validate", "-o", "json"]
+
+        let outcome = try await Task.detached(priority: .userInitiated) {
+            try Self.runStagedProcess(executable: binary, arguments: args, workingDirectory: workspace)
+        }.value
+
+        let report = Self.parseValidateReport(outcome.stdout)
+
+        if outcome.exitCode == BinaryManager.terminalExitCode {
+            logger.warning("Staged binary refused this workspace (exit 78); blocking cutover")
+            return .invalid(reason: Self.refusalReason(report: report, stderr: outcome.stderr))
+        }
+
+        guard let report else {
+            // No structured report: the staged binary likely predates the
+            // `validate` subcommand, or it failed in an unexpected way. Don't
+            // block the update on an ambiguous signal — proceed, but note it.
+            if outcome.exitCode != 0 {
+                logger.warning("Staged binary returned no validate report (exit \(outcome.exitCode)); proceeding without the config gate")
+            }
+            return .valid
+        }
+        if report.valid {
+            return .valid
+        }
+        let reason = report.error.flatMap { $0.isEmpty ? nil : $0 }
+            ?? "The new version rejected the current config."
+        return .invalid(reason: reason)
+    }
+
+    /// Explain a refusal in the update dialog, preferring the structured
+    /// integrity report over raw stderr — it carries each failing check with
+    /// the command that fixes it, which is what the operator has to act on.
+    nonisolated static func refusalReason(report: ValidateReport?, stderr: String) -> String {
+        if let failures = report?.integrity?.failures, !failures.isEmpty {
+            let detail = failures.map { check in
+                let fix = check.fix.flatMap { $0.isEmpty ? nil : "\n    fix: \($0)" } ?? ""
+                return "  \(check.name): \(check.detail ?? "failed")\(fix)"
+            }.joined(separator: "\n")
+            return "The new version refuses to serve this workspace:\n\n\(detail)"
+        }
+        if let loadError = report?.error, !loadError.isEmpty {
+            return loadError
+        }
+        let tail = BinaryManager.refusalSummary(fromStderr: stderr.components(separatedBy: .newlines))
+        return tail ?? "The new version refuses to serve this workspace (exit 78)."
+    }
+
+    /// Output of a staged-binary subprocess run.
+    nonisolated private struct StagedProcessOutcome: Sendable {
+        let exitCode: Int32
+        let stdout: String
+        let stderr: String
+    }
+
+    /// Run an executable to completion and capture its output. Nonisolated so
+    /// the blocking `waitUntilExit` runs off the main actor (driven from a
+    /// detached task). Output here is bounded (a single JSON report), so
+    /// reading stdout then stderr to EOF cannot deadlock.
+    nonisolated private static func runStagedProcess(
+        executable: URL,
+        arguments: [String],
+        workingDirectory: URL
+    ) throws -> StagedProcessOutcome {
+        let proc = Process()
+        proc.executableURL = executable
+        proc.currentDirectoryURL = workingDirectory
+        proc.arguments = arguments
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        proc.standardOutput = outPipe
+        proc.standardError = errPipe
+
+        // The extracted Payload binary isn't guaranteed executable until the
+        // install step's setAttributes; ensure it before running it here.
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+
+        try proc.run()
+
+        // Drain stdout and stderr concurrently. Reading one pipe to EOF before
+        // the other can deadlock: if the process fills the unread pipe's
+        // buffer it blocks on write and never closes the pipe we're draining.
+        // stderr reads on a background queue while stdout reads here; the
+        // semaphore establishes the happens-before for errBox before we read it.
+        let errBox = StagedOutputBox()
+        let errHandle = errPipe.fileHandleForReading
+        let drained = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            errBox.data = errHandle.readDataToEndOfFile()
+            drained.signal()
+        }
+        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+        drained.wait()
+        proc.waitUntilExit()
+
+        return StagedProcessOutcome(
+            exitCode: proc.terminationStatus,
+            stdout: String(data: outData, encoding: .utf8) ?? "",
+            stderr: String(data: errBox.data, encoding: .utf8) ?? ""
+        )
+    }
+
+    /// The `thane validate -o json` report. `validate` writes this object to
+    /// stdout on both success and failure, so a parseable report is the
+    /// authoritative signal; its absence means the binary doesn't speak it.
+    nonisolated struct ValidateReport: Decodable, Equatable, Sendable {
+        let path: String?
+        /// Whether the config *parsed*. Not the integrity verdict — that is
+        /// carried by `integrity` and by the process exit code.
+        let valid: Bool
+        let error: String?
+        let integrity: Integrity?
+
+        /// The core integrity report, mirroring `coreintegrity.Report`.
+        nonisolated struct Integrity: Decodable, Equatable, Sendable {
+            let corePath: String?
+            let checks: [Check]?
+
+            enum CodingKeys: String, CodingKey {
+                case corePath = "core_path"
+                case checks
+            }
+
+            nonisolated struct Check: Decodable, Equatable, Sendable {
+                let name: String
+                let status: String
+                let detail: String?
+                let fix: String?
+            }
+
+            /// Checks that did not pass. A skipped check is not a pass: it
+            /// means the requirement went unverified because a prerequisite
+            /// failed, which the boot gate treats as failure too.
+            var failures: [Check] {
+                (checks ?? []).filter { $0.status != "pass" }
+            }
+        }
+    }
+
+    /// Decode a `thane validate -o json` report from captured stdout. Returns
+    /// nil when the output isn't a validate report (empty, usage text from a
+    /// binary without the subcommand, or otherwise malformed).
+    nonisolated static func parseValidateReport(_ stdout: String) -> ValidateReport? {
+        guard let data = stdout.data(using: .utf8), !data.isEmpty else { return nil }
+        return try? JSONDecoder().decode(ValidateReport.self, from: data)
+    }
+
+=======
     /// Run the staged binary's `validate` subcommand against the workspace's
     /// canonical signed config, mirroring `BinaryManager.start()`.
     ///
@@ -478,6 +650,7 @@ final class UpdateManager {
         )
     }
 
+>>>>>>> origin/main
     private func downloadFile(from url: URL) async throws -> URL {
         let delegate = DownloadDelegate(tempFileExtension: "pkg") { [weak self] fraction in
             Task { @MainActor [weak self] in
