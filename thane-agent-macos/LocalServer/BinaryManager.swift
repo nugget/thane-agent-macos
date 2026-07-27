@@ -680,7 +680,7 @@ final class BinaryManager {
             do {
                 let result = try await Task.detached(priority: .userInitiated) {
                     let config = LocalThaneConfig.parse(at: configURL)
-                    let workingDirectory = Self.commandWorkingDirectory(for: workspace)
+                    let workingDirectory = ThaneInvocation.commandWorkingDirectory(for: workspace)
                     let validation = try ThaneProcessRunner.run(
                         executable: url,
                         arguments: ThaneInvocation.validationArguments(workspace: workspace),
@@ -843,7 +843,7 @@ final class BinaryManager {
                     try ThaneProcessRunner.run(
                         executable: binaryURL,
                         arguments: ThaneInvocation.initializationArguments(workspace: workspace),
-                        workingDirectory: Self.commandWorkingDirectory(for: workspace)
+                        workingDirectory: ThaneInvocation.commandWorkingDirectory(for: workspace)
                     )
                 }.value
                 guard let self, !Task.isCancelled else { return }
@@ -1196,20 +1196,6 @@ final class BinaryManager {
     }
 
     private struct ParsedLine { let version: String? }
-
-    nonisolated private static func commandWorkingDirectory(for workspace: URL) -> URL {
-        var isDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: workspace.path, isDirectory: &isDirectory),
-           isDirectory.boolValue {
-            return workspace
-        }
-        let parent = workspace.deletingLastPathComponent()
-        if FileManager.default.fileExists(atPath: parent.path, isDirectory: &isDirectory),
-           isDirectory.boolValue {
-            return parent
-        }
-        return .homeDirectory
-    }
 
     private func parseJSONLine(_ line: String) -> ParsedLine? {
         guard line.hasPrefix("{"),

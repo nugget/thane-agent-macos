@@ -444,40 +444,38 @@ final class UpdateManager {
 
     // MARK: - Private: Config Validation Gate
 
-    private enum ConfigValidationResult {
-        case valid
-        case invalid(reason: String)
-    }
-
     /// Run the staged binary's `validate` subcommand against the workspace's
     /// canonical signed config, mirroring `BinaryManager.start()`.
     ///
-    /// The staged binary must prove it understands the current signed-core
-    /// contract. Missing or malformed structured output blocks the cutover,
-    /// as does any config or integrity failure.
-    private func validateStagedConfig(binary: URL, binaryManager: BinaryManager) async throws -> ConfigValidationResult {
+    /// When the canonical config exists, the staged binary must validate it
+    /// successfully. On first install there is no active config yet, but the
+    /// binary must still emit a non-empty signed-core integrity report.
+    private func validateStagedConfig(
+        binary: URL,
+        binaryManager: BinaryManager
+    ) async throws -> StagedConfigValidationResult {
         let workspace = binaryManager.workspaceURL
         let args = ThaneInvocation.validationArguments(workspace: workspace)
+        let canonicalConfigURL = ThaneInvocation.canonicalConfigURL(workspace: workspace)
 
-        let outcome = try await Task.detached(priority: .userInitiated) {
-            try ThaneProcessRunner.run(
+        let result = try await Task.detached(priority: .userInitiated) {
+            let workingDirectory = ThaneInvocation.commandWorkingDirectory(for: workspace)
+            let canonicalConfigExists = FileManager.default.fileExists(
+                atPath: canonicalConfigURL.path
+            )
+            let outcome = try ThaneProcessRunner.run(
                 executable: binary,
                 arguments: args,
-                workingDirectory: workspace,
+                workingDirectory: workingDirectory,
                 ensureExecutable: true
             )
+            return (outcome, canonicalConfigExists)
         }.value
 
-        guard let report = ThaneValidationReport.parse(outcome.stdout) else {
-            logger.error("Staged binary emitted no structured integrity report (exit \(outcome.exitCode)); blocking update")
-            return .invalid(
-                reason: "The new Thane binary did not return a signed-core integrity report."
-            )
-        }
-        if report.passed {
-            return .valid
-        }
-        return .invalid(reason: report.operatorSummary)
+        return StagedConfigValidationPolicy.evaluate(
+            outcome: result.0,
+            canonicalConfigExists: result.1
+        )
     }
 
     private func downloadFile(from url: URL) async throws -> URL {

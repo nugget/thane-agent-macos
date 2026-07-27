@@ -25,6 +25,25 @@ nonisolated enum ThaneInvocation {
     static func initializationArguments(workspace: URL) -> [String] {
         ["init", workspace.path]
     }
+
+    /// Choose an existing directory for `Process.currentDirectoryURL`.
+    ///
+    /// The workspace is still passed explicitly through `-workspace`; this
+    /// directory only gives Foundation somewhere valid to launch the command
+    /// from when a first-run workspace is missing or is not a directory.
+    static func commandWorkingDirectory(for workspace: URL) -> URL {
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: workspace.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            return workspace
+        }
+        let parent = workspace.deletingLastPathComponent()
+        if FileManager.default.fileExists(atPath: parent.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            return parent
+        }
+        return .homeDirectory
+    }
 }
 
 /// One requirement in thane's structured core-integrity report.
@@ -38,7 +57,7 @@ nonisolated struct CoreIntegrityCheck: Decodable, Equatable, Identifiable, Senda
     var passed: Bool { status == "pass" }
 }
 
-/// The integrity portion of `thane validate -o json`.
+/// The integrity portion of `thane -o json validate`.
 nonisolated struct CoreIntegrityReport: Decodable, Equatable, Sendable {
     let workspace: String
     let corePath: String
@@ -68,7 +87,7 @@ nonisolated struct CoreIntegrityReport: Decodable, Equatable, Sendable {
     }
 }
 
-/// The complete structured preflight emitted by `thane validate -o json`.
+/// The complete structured preflight emitted by `thane -o json validate`.
 ///
 /// `valid` describes config parsing. Core integrity is reported separately, so
 /// callers must use `passed` rather than `valid` alone before starting serve.
@@ -95,6 +114,48 @@ nonisolated struct ThaneValidationReport: Decodable, Equatable, Sendable {
     static func parse(_ stdout: String) -> ThaneValidationReport? {
         guard let data = stdout.data(using: .utf8), !data.isEmpty else { return nil }
         return try? JSONDecoder().decode(ThaneValidationReport.self, from: data)
+    }
+}
+
+nonisolated enum StagedConfigValidationResult: Equatable, Sendable {
+    case valid
+    case invalid(reason: String)
+}
+
+/// Applies the staged-install trust policy to a structured validation result.
+///
+/// An existing canonical config must pass exactly as it would before launch.
+/// A first install has no active config to validate yet, but the staged binary
+/// must still prove that it implements the signed-core contract by returning a
+/// non-empty integrity report. Missing or legacy structured output always
+/// fails closed.
+nonisolated enum StagedConfigValidationPolicy {
+    static let missingIntegrityReason =
+        "The new Thane binary did not return a signed-core integrity report."
+
+    static func evaluate(
+        outcome: ThaneProcessOutcome,
+        canonicalConfigExists: Bool
+    ) -> StagedConfigValidationResult {
+        guard let report = ThaneValidationReport.parse(outcome.stdout),
+              let integrity = report.integrity,
+              !integrity.checks.isEmpty
+        else {
+            return .invalid(reason: missingIntegrityReason)
+        }
+
+        guard canonicalConfigExists else {
+            return .valid
+        }
+        guard report.passed else {
+            return .invalid(reason: report.operatorSummary)
+        }
+        guard outcome.exitCode == 0 else {
+            return .invalid(
+                reason: "The new Thane binary exited with status \(outcome.exitCode) during validation."
+            )
+        }
+        return .valid
     }
 }
 
