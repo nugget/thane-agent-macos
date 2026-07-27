@@ -3,6 +3,8 @@ import SwiftUI
 
 struct ProcessHealthView: View {
     @Environment(AppState.self) private var appState
+    @AppStorage("localProcessLogMinimumLevel")
+    private var minimumLogLevelRaw = BinaryManager.RuntimeLogLevel.warn.rawValue
     @State private var confirmsInitialization = false
 
     private var manager: BinaryManager { appState.binaryManager }
@@ -247,25 +249,141 @@ struct ProcessHealthView: View {
     }
 
     private var activityPanel: some View {
-        GroupBox("Recent Activity") {
-            VStack(alignment: .leading, spacing: 7) {
-                ForEach(Array(manager.recentLogs.suffix(10))) { entry in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(entry.date, format: .dateTime.hour().minute().second())
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.tertiary)
-                        Image(systemName: entry.isError ? "exclamationmark.circle.fill" : "circle.fill")
-                            .font(.system(size: 7))
-                            .foregroundStyle(entry.isError ? .red : .secondary)
-                        Text(entry.message)
-                            .font(.caption.monospaced())
-                            .lineLimit(2)
-                            .textSelection(.enabled)
+        let entries = Array(visibleLogEntries.suffix(12))
+        return GroupBox {
+            Group {
+                if entries.isEmpty {
+                    HStack(spacing: 10) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(emptyLogTitle)
+                                .font(.subheadline.weight(.medium))
+                            Text("Lower the level to inspect the retained activity window.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 8)
+                } else {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(entries) { entry in
+                            logRow(entry)
+                            if entry.id != entries.last?.id {
+                                Divider()
+                            }
+                        }
                     }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.top, 4)
+        } label: {
+            HStack {
+                Text("Recent Activity")
+
+                Text("\(manager.recentLogs.count)/\(manager.recentLogs.capacity)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+                    .help("A fixed-size rolling window; oldest entries are overwritten.")
+
+                Spacer()
+
+                Picker("Minimum Level", selection: minimumLogLevelBinding) {
+                    ForEach(BinaryManager.RuntimeLogLevel.allCases) { level in
+                        Text(level.title).tag(level)
+                    }
+                }
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(width: 112)
+                .help("Filter this window live without restarting Thane.")
+            }
+            .frame(maxWidth: .infinity)
+        }
+    }
+
+    private func logRow(_ entry: BinaryManager.RuntimeLogEntry) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text(entry.date, format: .dateTime.hour().minute().second())
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .frame(width: 62, alignment: .leading)
+                .padding(.top, 2)
+
+            Text(entry.level.rawValue.uppercased())
+                .font(.caption2.monospaced().weight(.semibold))
+                .foregroundStyle(logTint(entry.level))
+                .frame(width: 45, alignment: .leading)
+                .padding(.top, 2)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.message)
+                    .font(.callout)
+                    .lineLimit(3)
+                    .textSelection(.enabled)
+
+                if !entry.fields.isEmpty {
+                    Text(metadataSummary(entry.fields))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .textSelection(.enabled)
+                }
+
+                if (entry.level == .trace || entry.level == .debug), let source = entry.source {
+                    Label(source, systemImage: "chevron.left.forwardslash.chevron.right")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
+    }
+
+    private var minimumLogLevel: BinaryManager.RuntimeLogLevel {
+        BinaryManager.RuntimeLogLevel(rawValue: minimumLogLevelRaw) ?? .warn
+    }
+
+    private var minimumLogLevelBinding: Binding<BinaryManager.RuntimeLogLevel> {
+        Binding(
+            get: { minimumLogLevel },
+            set: { minimumLogLevelRaw = $0.rawValue }
+        )
+    }
+
+    private var visibleLogEntries: [BinaryManager.RuntimeLogEntry] {
+        manager.recentLogs.entries.filter { minimumLogLevel.includes($0.level) }
+    }
+
+    private var emptyLogTitle: String {
+        switch minimumLogLevel {
+        case .warn: "No warnings or errors"
+        case .error: "No errors"
+        default: "No \(minimumLogLevel.title.lowercased()) activity"
+        }
+    }
+
+    private func metadataSummary(_ fields: [BinaryManager.RuntimeLogField]) -> String {
+        let visibleFields = fields.prefix(5)
+            .map { "\($0.label): \($0.value)" }
+            .joined(separator: "  •  ")
+        let remainder = fields.count - min(fields.count, 5)
+        return remainder > 0 ? "\(visibleFields)  •  +\(remainder) more" : visibleFields
+    }
+
+    private func logTint(_ level: BinaryManager.RuntimeLogLevel) -> Color {
+        switch level {
+        case .trace, .debug: .secondary
+        case .info: .blue
+        case .warn: .orange
+        case .error: .red
         }
     }
 
