@@ -80,6 +80,7 @@ struct AboutView: View {
         .frame(width: 300)
         .onDisappear {
             feedbackResetTask?.cancel()
+            versionCopyFeedback = .idle
         }
     }
 
