@@ -32,7 +32,7 @@ It's designed as the *Mac-shaped* front end for Thane: not a chat client on the 
 
 Working today:
 
-- **Native operator app** — Searchable conversation history, keyboard command menu, menu bar controls, native server panels, and a first-class web Dashboard window
+- **Native operator app** — A dedicated chat window, searchable conversation history, keyboard commands, configurable menu bar status, and a first-class web Dashboard window
 - **WebSocket transport** — Auth handshake and platform request routing to a Thane server
 - **Binary update manager** — GitHub release polling, signed pkg install, SHA-256 verification, atomic stop/restart
 - **Signed-core supervision** — Preflight validation of `core/config.yaml`, terminal exit handling, repair guidance, live resource stats, code-signature inspection, and installer provenance
@@ -52,30 +52,28 @@ The platform-provider architecture (`PlatformServiceRouter`, `PlatformServicePro
 
 Download the latest signed `.dmg` from the [Releases page](https://github.com/nugget/thane-agent-macos/releases/latest) and drag the app into Applications.
 
-After first launch, choose how you want to run Thane. Both modes share the same chat UI, menu bar, and platform-service bridge — the difference is only where the agent process lives.
+After first launch, open **Settings → Thane** and choose a configuration. Once configured, chat, the menu bar, Dashboard, and platform services use neutral Thane status — the process location stays an implementation detail.
 
-### Option 1: Connect to an existing Thane server
+### Managed
 
-If `thane` is already running on a home server, NAS, or any other host:
+Managed is the default. The app installs, verifies, updates, and supervises Thane on this Mac:
 
-1. Open **Settings → Remote**
-2. Enter the base URL (e.g. `https://thane.yourdomain.tld` or `http://thane-host.local:8080`) and an API token
-3. Click **Connect**
-
-The app becomes a chat client and registers this Mac as a platform provider over WebSocket, exposing native macOS frameworks back to the remote agent.
-
-### Option 2: Run Thane on this Mac
-
-If you want Thane to live on the same Mac as the companion app, let the app install and supervise the binary for you:
-
-1. Open **Settings → Local**
+1. Open **Settings → Thane → Managed**
 2. The app auto-discovers `thane` in `~/Thane/bin/`, `/usr/local/bin/`, `/opt/homebrew/bin/`, and `~/.local/bin/`. If none is present, the **Binary Updates** section downloads a signed `.pkg` directly from the [thane-ai-agent releases](https://github.com/nugget/thane-ai-agent/releases) — SHA-256 checksum + pkg signature both verified before install
 3. Point **Workspace** at your Thane directory (defaults to `~/Thane/`). A current Thane instance keeps its signed runtime config at `core/config.yaml`; `thane init ~/Thane` creates that core, or the app can initialize it when startup finds a missing workspace
 4. Click **Check & Start**. The app runs the same structured preflight as `thane validate`, then starts only when the config and signed core pass
 
-Once running, **Local Thane** shows live resource stats, signed-core status, code-signature provenance, recent activity, and restart controls. Optional Apple notifications can surface warnings quietly or errors actively, with separate controls for privacy, sound, repetition, retention, foreground delivery, and temporary muting. Repeated incidents replace themselves, bursts are summarized, and selecting a notification opens the relevant Process Health view. A terminal configuration failure (exit 78) pauses automatic restart and presents Thane's exact findings and repair commands instead of creating a crash loop. **Binary Updates** pulls newer signed releases when they land on GitHub; the app validates the active workspace with the staged binary before it atomically stops the process, swaps the binary, and restarts it.
+When Managed is relevant, **Agent Health** shows live resource stats, signed-core status, code-signature provenance, recent activity, and restart controls. Optional Apple notifications can surface warnings quietly or errors actively, with separate controls for privacy, sound, repetition, retention, foreground delivery, and temporary muting. Repeated incidents replace themselves, bursts are summarized, and selecting a notification opens Agent Health. A terminal configuration failure (exit 78) pauses automatic restart and presents Thane's exact findings and repair commands instead of creating a crash loop. **Binary Updates** validates the active workspace with each staged binary before atomically stopping, installing, and restarting Thane.
 
-When a local Thane is running, the app auto-connects to `localhost` and prefers it over any remote URL you've configured — so you can keep a Remote entry as a fallback for when the local process is stopped.
+### Advanced
+
+Advanced connects the app to a Thane instance you operate yourself on another Mac, a home server, or a NAS:
+
+1. Open **Settings → Thane → Advanced**
+2. Enter the base URL (for example, `https://thane.yourdomain.tld` or `http://thane-host.local:8080`) and API token
+3. Click **Connect**
+
+The app uses the same chat, status language, Dashboard, and macOS platform-service bridge in either configuration. Disconnect is deliberately kept in Advanced Settings rather than the menu bar because it is an exceptional, disruptive action.
 
 ## Build from source
 
@@ -109,7 +107,7 @@ Release notes and artifacts live at [Releases](https://github.com/nugget/thane-a
 - **Connection** — `ServerConnection.swift` (WebSocket client with auth handshake and platform request routing)
 - **Platform services** — `PlatformServiceRouter.swift` dispatches requests to registered providers (currently: `CalendarService`, `ContactsService`)
 - **Chat** — SwiftUI chat view backed by SwiftData (`Conversation`, `ChatMessage`)
-- **Local Thane** — Signed-core preflight, terminal-failure guidance, live resource stats, bounded recent activity, nuanced warning/error notifications, and code-signature summary
+- **Managed Thane** — Signed-core preflight, terminal-failure guidance, live resource stats, bounded recent activity, nuanced warning/error notifications, and code-signature summary
 
 ## Related
 

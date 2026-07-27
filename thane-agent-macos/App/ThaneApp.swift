@@ -29,7 +29,7 @@ struct ThaneApp: App {
     }()
 
     var body: some Scene {
-        WindowGroup("Thane", id: "main") {
+        WindowGroup("Thane Chat", id: "main") {
             MainView()
                 .environment(appState)
                 .onAppear { appDelegate.appState = appState }
@@ -46,7 +46,12 @@ struct ThaneApp: App {
             MenuBarView()
                 .environment(appState)
         } label: {
-            Image(systemName: appState.menuBarSymbol)
+            HStack(spacing: 4) {
+                Image(systemName: appState.menuBarSymbol)
+                if let text = appState.menuBarText {
+                    Text(text)
+                }
+            }
         }
 
         Settings {
@@ -55,7 +60,7 @@ struct ThaneApp: App {
                 .modelContainer(Self.modelContainer)
         }
 
-        Window("Process Health", id: "process-health") {
+        Window("Agent Health", id: "process-health") {
             ProcessHealthView()
                 .environment(appState)
         }
@@ -67,13 +72,6 @@ struct ThaneApp: App {
                 .environment(appState)
         }
         .defaultSize(width: 1024, height: 768)
-        .windowResizability(.contentMinSize)
-
-        Window("Server", id: "server") {
-            ServerView()
-                .environment(appState)
-        }
-        .defaultSize(width: 900, height: 600)
         .windowResizability(.contentMinSize)
 
         Window("About Thane", id: "about") {
@@ -99,21 +97,11 @@ private struct ThaneCommands: Commands {
             .keyboardShortcut("n", modifiers: .command)
         }
 
-        CommandMenu("Agent") {
-            Button("Server Status") {
-                openWindow(id: "server")
-            }
-            .keyboardShortcut("1", modifiers: .command)
-
+        CommandMenu("Thane") {
             Button("Web Dashboard") {
                 openWindow(id: "dashboard")
             }
             .keyboardShortcut("2", modifiers: .command)
-
-            Button("Local Thane") {
-                openWindow(id: "process-health")
-            }
-            .keyboardShortcut("3", modifiers: .command)
         }
     }
 }

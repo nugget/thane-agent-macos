@@ -9,7 +9,8 @@ struct MainView: View {
     @State private var selectedConversation: Conversation?
 
     private var ollamaURL: URL? {
-        if appState.binaryManager.state.isRunning {
+        if appState.configurationMode == .managed,
+           appState.binaryManager.state.isRunning {
             let port = appState.binaryManager.localConfig.ollamaPort
             return URL(string: "http://localhost:\(port)")
         }
@@ -28,238 +29,84 @@ struct MainView: View {
             }
         }
         .frame(minWidth: 820, minHeight: 560)
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    openWindow(id: "server")
-                } label: {
-                    Label("Server", systemImage: "server.rack")
-                }
-                .help("Server Status (⌘1)")
-                .disabled(appState.activeServer == nil)
-
-                Button {
-                    openWindow(id: "dashboard")
-                } label: {
-                    Label("Dashboard", systemImage: "rectangle.3.group")
-                }
-                .help("Web Dashboard (⌘2)")
-                .disabled(appState.dashboardURL == nil)
-
-                Button {
-                    openWindow(id: "process-health")
-                } label: {
-                    Label("Local Thane", systemImage: localStatusIcon)
-                }
-                .help("Local Thane (⌘3)")
-            }
-        }
         .onAppear {
+            migrateLegacyConfigurationIfNeeded()
             appState.openMainWindow = { openWindow(id: "main") }
             appState.registerProcessHealthWindowOpener {
                 openWindow(id: "process-health")
             }
             appState.openDashboardWindow = { openWindow(id: "dashboard") }
-            appState.openServerWindow = { openWindow(id: "server") }
-            connectRemoteIfAppropriate()
-        }
-        .onChange(of: appState.binaryManager.state) {
-            connectRemoteIfAppropriate()
+            appState.activateSelectedConfiguration(advancedConfig: defaultConfigs.first)
         }
     }
 
     private var welcomeView: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                VStack(spacing: 10) {
-                    Image(nsImage: NSApplication.shared.applicationIconImage)
-                        .resizable()
-                        .frame(width: 82, height: 82)
-                        .shadow(color: .black.opacity(0.12), radius: 10, y: 4)
+        VStack(spacing: 18) {
+            Image(systemName: "bubble.left.and.bubble.right.fill")
+                .font(.system(size: 42))
+                .foregroundStyle(.tint)
+                .frame(width: 82, height: 82)
+                .background(.tint.opacity(0.1), in: Circle())
 
-                    Text("Thane")
-                        .font(.largeTitle.weight(.semibold))
-                    Text("Your agent, at home on this Mac.")
-                        .font(.title3)
-                        .foregroundStyle(.secondary)
-                }
-
-                statusCard
-
-                if case .needsAttention = appState.binaryManager.state {
-                    attentionCard
-                } else if ollamaURL == nil {
-                    setupCard
-                } else {
-                    readyActions
-                }
-            }
-            .frame(maxWidth: 620)
-            .padding(.horizontal, 32)
-            .padding(.vertical, 48)
-            .frame(maxWidth: .infinity)
-        }
-        .background(Color(nsColor: .windowBackgroundColor))
-    }
-
-    private var statusCard: some View {
-        HStack(spacing: 12) {
-            Image(systemName: appState.isConnected ? "checkmark.circle.fill" : "circle")
-                .font(.title3)
-                .foregroundStyle(appState.isConnected ? .green : .secondary)
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(appState.statusText)
-                    .font(.headline)
-                Text(activeServerDetail)
-                    .font(.caption)
+            VStack(spacing: 6) {
+                Text("Chat with Thane")
+                    .font(.largeTitle.weight(.semibold))
+                Text(welcomeDetail)
+                    .font(.title3)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
             }
 
-            Spacer()
-
-            if !appState.isConnected {
-                SettingsLink {
-                    Text("Connection Settings…")
-                }
-                .controlSize(.small)
-            }
-        }
-        .padding(16)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private var attentionCard: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Local Thane needs attention", systemImage: "exclamationmark.shield.fill")
-                .font(.headline)
-                .foregroundStyle(.orange)
-
-            Text(appState.binaryManager.lastValidationReport?.operatorSummary
-                 ?? "The signed core did not pass startup verification. Automatic restart is paused.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-
-            HStack {
-                Button("Review Findings", systemImage: "list.bullet.clipboard") {
-                    openWindow(id: "process-health")
-                }
-                .buttonStyle(.borderedProminent)
-
-                SettingsLink {
-                    Text("Local Settings…")
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(.orange.opacity(0.25))
-        }
-    }
-
-    private var setupCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Choose where Thane lives")
-                .font(.headline)
-            Text("Run a signed instance on this Mac, or connect to one you already operate.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 12) {
-                SettingsLink {
-                    Label("Set Up This Mac", systemImage: "desktopcomputer")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-
-                SettingsLink {
-                    Label("Connect to a Server", systemImage: "network")
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private var readyActions: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("What would you like to do?")
-                .font(.headline)
-
-            HStack(spacing: 12) {
-                actionButton("New Conversation", icon: "square.and.pencil") {
+            if appState.isConnected {
+                Button("New Conversation", systemImage: "square.and.pencil") {
                     NotificationCenter.default.post(name: .newConversation, object: nil)
                 }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+            } else {
+                HStack(spacing: 10) {
+                    Button("Thane Settings…", systemImage: "gearshape") {
+                        appState.selectedSettingsTab = .agent
+                        showSettings()
+                    }
+                    .buttonStyle(.borderedProminent)
 
-                actionButton("Server Status", icon: "server.rack") {
-                    openWindow(id: "server")
-                }
-
-                if appState.binaryManager.state != .notConfigured {
-                    actionButton("Local Thane", icon: "waveform.path.ecg") {
-                        openWindow(id: "process-health")
+                    if appState.managedRuntimeIsRelevant {
+                        Button("Agent Health…", systemImage: "waveform.path.ecg") {
+                            openWindow(id: "process-health")
+                        }
                     }
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: 520)
+        .padding(48)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 
-    private func actionButton(_ title: String, icon: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(alignment: .leading, spacing: 12) {
-                Image(systemName: icon)
-                    .font(.title2)
-                    .foregroundStyle(.tint)
-                Text(title)
-                    .font(.subheadline.weight(.medium))
-                    .foregroundStyle(.primary)
-            }
-            .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
-            .padding(14)
-            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 11))
+    private var welcomeDetail: String {
+        if appState.isConnected {
+            return "Choose a conversation, or begin a new one."
         }
-        .buttonStyle(.plain)
+        if appState.configurationMode == .managed,
+           case .needsAttention = appState.binaryManager.state {
+            return "Thane needs attention before you can continue."
+        }
+        return "Thane is unavailable. Review its settings to get connected."
     }
 
-    private var activeServerDetail: String {
-        if appState.activeServer?.isLocal == true {
-            return "Using the signed instance on this Mac"
-        }
-        if let server = appState.activeServer {
-            return server.baseURL.host ?? server.baseURL.absoluteString
-        }
-        if appState.binaryManager.state == .starting {
-            return "Verifying the local signed core"
-        }
-        return "No active server"
+    private func showSettings() {
+        NSApp.activate()
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 
-    private var localStatusIcon: String {
-        switch appState.binaryManager.state {
-        case .running: "checkmark.circle.fill"
-        case .starting: "checkmark.shield"
-        case .needsAttention: "exclamationmark.shield.fill"
-        case .crashed: "exclamationmark.triangle.fill"
-        case .stopped: "stop.circle"
-        case .notConfigured: "questionmark.circle"
-        }
-    }
-
-    private func connectRemoteIfAppropriate() {
-        guard !appState.isConnected, let config = defaultConfigs.first else { return }
-        switch appState.binaryManager.state {
-        case .starting, .running:
-            return
-        case .notConfigured, .stopped, .crashed, .needsAttention:
-            appState.connect(config: config)
-        }
+    private func migrateLegacyConfigurationIfNeeded() {
+        guard !appState.hadStoredConfigurationMode,
+              appState.binaryManager.state == .notConfigured,
+              !defaultConfigs.isEmpty
+        else { return }
+        appState.selectConfiguration(.advanced, advancedConfig: defaultConfigs.first)
     }
 }
 
