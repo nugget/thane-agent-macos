@@ -4,7 +4,7 @@ import os
 
 /// Manages a local `thane` binary as a child process.
 ///
-/// Lifecycle: find → start → running → stop/crash → stopped
+/// Lifecycle: find → verify signed core → start → running → stop/crash → stopped
 ///
 /// The canonical managed install location is ~/Thane/bin/thane, matching
 /// the .pkg installer and the default workspace. For development, we also
@@ -24,7 +24,7 @@ import os
 /// read fields without actor hops. Without this, `xcodebuild test`
 /// rejects every reference with "Main actor-isolated ... can not be
 /// referenced from a nonisolated context."
-nonisolated struct LocalThaneConfig {
+nonisolated struct LocalThaneConfig: Sendable {
     var nativePort: Int = 8080
     var ollamaPort: Int = 11434
     /// Whether the companion WebSocket endpoint is enabled in the parsed
@@ -133,14 +133,16 @@ final class BinaryManager {
         case starting
         case running(pid: Int32)
         case crashed(code: Int32)
+        case needsAttention(code: Int32)
 
         var label: String {
             switch self {
             case .notConfigured:    "Not Configured"
             case .stopped:          "Stopped"
-            case .starting:         "Starting..."
+            case .starting:         "Starting…"
             case .running:          "Running"
             case .crashed(let c):   "Crashed (exit \(c))"
+            case .needsAttention:   "Needs Attention"
             }
         }
 
@@ -156,6 +158,7 @@ final class BinaryManager {
         case healthy   = "Healthy"
         case degraded  = "Degraded"
         case crashLoop = "Crash Loop"
+        case attention = "Needs Attention"
         case stopped   = "Stopped"
     }
 
@@ -163,6 +166,13 @@ final class BinaryManager {
         var cpuPercent: Double = 0
         var residentMemoryMB: Double = 0
         var threadCount: Int = 0
+    }
+
+    struct RuntimeLogEntry: Identifiable {
+        let id = UUID()
+        let date: Date
+        let message: String
+        let isError: Bool
     }
 
     /// How the managed binary was installed. Determines what trust signals
@@ -184,6 +194,9 @@ final class BinaryManager {
     private(set) var startedAt: Date?
     private(set) var detectedVersion: String?
     private(set) var localConfig: LocalThaneConfig = .defaults
+    private(set) var lastValidationReport: ThaneValidationReport?
+    private(set) var lastTerminalMessage: String?
+    private(set) var recentLogs: [RuntimeLogEntry] = []
 
     /// Called whenever state changes. AppState uses this to auto-connect the WebSocket.
     var onStateChange: ((State) -> Void)?
@@ -200,23 +213,34 @@ final class BinaryManager {
             updateBinaryMtime()
             Task { await refreshCodeSignature() }
             startWatchingBinary()
+            if oldValue != binaryURL, state.isRunning {
+                restart()
+            }
         }
     }
 
-    /// Working directory for the thane process. Thane's config discovery
-    /// includes CWD, so ~/Thane/config.yaml is found automatically when
-    /// workspaceURL is ~/Thane/. Defaults to ~/Thane/ on first run.
+    /// Root containing the signed `core/` directory. Thane receives this path
+    /// explicitly through `-workspace`; the process CWD is not trusted for
+    /// configuration discovery. Defaults to ~/Thane/ on first run.
     var workspaceURL: URL {
         didSet {
             UserDefaults.standard.set(workspaceURL.path, forKey: "workspacePath")
+            guard oldValue != workspaceURL else { return }
+            lastValidationReport = nil
+            lastTerminalMessage = nil
+            if state.isRunning {
+                restart()
+            } else if state == .starting {
+                stop()
+            } else {
+                refreshState()
+            }
         }
     }
 
-    /// Explicit config path. Leave nil to rely on CWD + thane's discovery order.
-    var configURL: URL? {
-        didSet {
-            UserDefaults.standard.set(configURL?.path, forKey: "configPath")
-        }
+    /// The only normal runtime config location: the signed config inside core.
+    var canonicalConfigURL: URL {
+        ThaneInvocation.canonicalConfigURL(workspace: workspaceURL)
     }
 
     private(set) var codeSignature: AppleCodeSignature?
@@ -239,6 +263,8 @@ final class BinaryManager {
             return .degraded
         case .starting:
             return recentCrashCount >= 3 ? .crashLoop : .healthy
+        case .needsAttention:
+            return .attention
         case .stopped, .notConfigured:
             return .stopped
         }
@@ -254,6 +280,7 @@ final class BinaryManager {
     private var process: Process?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
+    private var startTask: Task<Void, Never>?
     private var restartTask: Task<Void, Never>?
     private var statsTask: Task<Void, Never>?
     private var binaryWatcher: DirectoryWatcher?
@@ -304,9 +331,10 @@ final class BinaryManager {
         workspaceURL = UserDefaults.standard.string(forKey: "workspacePath")
             .map { URL(fileURLWithPath: $0) }
             ?? URL.homeDirectory.appending(path: "Thane")
-        if let path = UserDefaults.standard.string(forKey: "configPath") {
-            configURL = URL(fileURLWithPath: path)
-        }
+        // PR 1260 retired arbitrary config selection from the normal runtime.
+        // Discard the app's old preference so it cannot silently opt a managed
+        // instance out of signed-core verification.
+        UserDefaults.standard.removeObject(forKey: "configPath")
         refreshState()
         updateBinaryMtime()
         Task { await refreshCodeSignature() }
@@ -322,12 +350,27 @@ final class BinaryManager {
     func autoStartIfNeeded() {
         guard shouldRun, case .stopped = state else { return }
         let workspace = workspaceURL
-        Task { @MainActor [weak self] in
+        Task { [weak self] in
             guard let self else { return }
-            do {
-                _ = try FileManager.default.contentsOfDirectory(atPath: workspace.path)
-            } catch {
-                logger.error("Workspace is inaccessible at startup: \(workspace.path, privacy: .public); auto-start aborted: \(error.localizedDescription, privacy: .public)")
+            let accessError = await Task.detached(priority: .utility) {
+                var isDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: workspace.path, isDirectory: &isDirectory) else {
+                    // A missing first-run workspace is a valid state. Let
+                    // structured preflight describe it and offer initialization.
+                    return nil as String?
+                }
+                guard isDirectory.boolValue else {
+                    return "The workspace path exists but is not a directory."
+                }
+                do {
+                    _ = try FileManager.default.contentsOfDirectory(atPath: workspace.path)
+                    return nil as String?
+                } catch {
+                    return error.localizedDescription
+                }
+            }.value
+            if let accessError {
+                logger.error("Workspace is inaccessible at startup: \(workspace.path, privacy: .public); auto-start aborted: \(accessError, privacy: .public)")
                 append("Auto-start aborted: workspace is inaccessible at \(workspace.path)", isError: true)
                 shouldRun = false
                 return
@@ -339,26 +382,91 @@ final class BinaryManager {
     }
 
     func start() {
+        startTask?.cancel()
+        startTask = nil
         restartTask?.cancel()
         restartTask = nil
         guard let url = binaryURL,
-              FileManager.default.fileExists(atPath: url.path),
-              !state.isRunning else { return }
+              FileManager.default.fileExists(atPath: url.path) else { return }
+        switch state {
+        case .stopped, .crashed, .needsAttention:
+            break
+        case .notConfigured, .starting, .running:
+            return
+        }
 
         shouldRun = true
         state = .starting
         detectedVersion = nil
         lastCPUSample = nil
-        localConfig = LocalThaneConfig.parse(at: configURL ?? workspaceURL.appending(path: "config.yaml"))
+        lastValidationReport = nil
+        lastTerminalMessage = nil
+        recentLogs.removeAll()
 
-        let proc = Process()
-        proc.executableURL = url
-        proc.currentDirectoryURL = workspaceURL
-        var args = ["serve"]
-        if let configPath = configURL?.path {
-            args += ["--config", configPath]
+        let workspace = workspaceURL
+        let configURL = canonicalConfigURL
+        startTask = Task { [weak self] in
+            do {
+                let result = try await Task.detached(priority: .userInitiated) {
+                    let config = LocalThaneConfig.parse(at: configURL)
+                    let workingDirectory = Self.commandWorkingDirectory(for: workspace)
+                    let validation = try ThaneProcessRunner.run(
+                        executable: url,
+                        arguments: ThaneInvocation.validationArguments(workspace: workspace),
+                        workingDirectory: workingDirectory
+                    )
+                    return (config, validation)
+                }.value
+                guard let self, !Task.isCancelled, shouldRun, state == .starting else { return }
+                localConfig = result.0
+                handlePreflight(result.1, binaryURL: url)
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                shouldRun = false
+                state = .crashed(code: 1)
+                lastTerminalMessage = "Could not validate this workspace: \(error.localizedDescription)"
+                append(lastTerminalMessage ?? "Validation failed", isError: true)
+            }
         }
-        proc.arguments = args
+    }
+
+    private func handlePreflight(_ outcome: ThaneProcessOutcome, binaryURL: URL) {
+        let report = ThaneValidationReport.parse(outcome.stdout)
+        lastValidationReport = report
+
+        if let report {
+            guard report.passed, outcome.exitCode == 0 else {
+                shouldRun = false
+                state = .needsAttention(code: outcome.exitCode)
+                lastTerminalMessage = report.operatorSummary
+                append("Startup blocked: \(report.operatorSummary)", isError: true)
+                logger.error("Core preflight failed; refusing to start local thane (exit \(outcome.exitCode))")
+                return
+            }
+            append("Signed core verified", isError: false)
+            launchServe(binaryURL: binaryURL)
+            return
+        }
+
+        shouldRun = false
+        let combinedOutput = (outcome.stdout + "\n" + outcome.stderr)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        lastTerminalMessage = combinedOutput.isEmpty
+            ? "This Thane version cannot prove signed-core integrity. Update Thane before starting it from this app."
+            : combinedOutput
+        state = .needsAttention(
+            code: outcome.exitCode == 0 ? ThaneInvocation.terminalExitCode : outcome.exitCode
+        )
+        append(lastTerminalMessage ?? "Signed-core validation was unavailable", isError: true)
+        logger.error("Thane did not emit a structured integrity report; refusing to start")
+    }
+
+    private func launchServe(binaryURL: URL) {
+        guard shouldRun, state == .starting else { return }
+        let proc = Process()
+        proc.executableURL = binaryURL
+        proc.currentDirectoryURL = workspaceURL
+        proc.arguments = ThaneInvocation.serveArguments(workspace: workspaceURL)
 
         let out = Pipe()
         let err = Pipe()
@@ -401,11 +509,27 @@ final class BinaryManager {
 
     func stop() {
         shouldRun = false
+        startTask?.cancel()
+        startTask = nil
         restartTask?.cancel()
         restartTask = nil
+        if case .starting = state {
+            state = .stopped
+            return
+        }
         guard state.isRunning else { return }
         process?.terminate()
         // State update happens in terminationHandler.
+    }
+
+    /// Stop in-flight launch work and signal the managed child before the app
+    /// exits, while preserving `shouldRun` so launch-at-login can restore the
+    /// operator's intent next time.
+    func prepareForApplicationTermination() {
+        startTask?.cancel()
+        restartTask?.cancel()
+        statsTask?.cancel()
+        process?.terminate()
     }
 
     func restart() {
@@ -419,6 +543,59 @@ final class BinaryManager {
             }
         } else {
             start()
+        }
+    }
+
+    var canInitializeWorkspace: Bool {
+        lastValidationReport?.integrity?.failures.contains {
+            $0.name == "core_directory"
+        } == true
+    }
+
+    /// Create the workspace's signed core using thane's own idempotent
+    /// bootstrap, then immediately run the normal verification-and-start path.
+    func initializeWorkspace() {
+        guard canInitializeWorkspace, let binaryURL else { return }
+
+        startTask?.cancel()
+        restartTask?.cancel()
+        state = .starting
+        shouldRun = true
+        append("Initializing the signed workspace…", isError: false)
+
+        let workspace = workspaceURL
+        startTask = Task { [weak self] in
+            do {
+                let outcome = try await Task.detached(priority: .userInitiated) {
+                    try ThaneProcessRunner.run(
+                        executable: binaryURL,
+                        arguments: ThaneInvocation.initializationArguments(workspace: workspace),
+                        workingDirectory: Self.commandWorkingDirectory(for: workspace)
+                    )
+                }.value
+                guard let self, !Task.isCancelled else { return }
+                guard outcome.exitCode == 0 else {
+                    shouldRun = false
+                    state = outcome.exitCode == ThaneInvocation.terminalExitCode
+                        ? .needsAttention(code: outcome.exitCode)
+                        : .crashed(code: outcome.exitCode)
+                    let message = outcome.stderr.isEmpty ? outcome.stdout : outcome.stderr
+                    lastTerminalMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+                    append(lastTerminalMessage ?? "Workspace initialization failed", isError: true)
+                    return
+                }
+
+                append("Workspace initialized", isError: false)
+                state = .stopped
+                startTask = nil
+                start()
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                shouldRun = false
+                state = .crashed(code: 1)
+                lastTerminalMessage = "Could not initialize this workspace: \(error.localizedDescription)"
+                append(lastTerminalMessage ?? "Workspace initialization failed", isError: true)
+            }
         }
     }
 
@@ -578,6 +755,7 @@ final class BinaryManager {
     // MARK: - Private
 
     private func handleTermination(code: Int32) {
+        startTask = nil
         statsTask?.cancel()
         statsTask = nil
         processStats = ProcessStats()
@@ -595,6 +773,19 @@ final class BinaryManager {
             recentCrashCount = 0
             state = .stopped
             append("thane stopped", isError: false)
+        } else if code == ThaneInvocation.terminalExitCode {
+            shouldRun = false
+            state = .needsAttention(code: code)
+            let diagnostic = recentLogs
+                .filter(\.isError)
+                .suffix(16)
+                .map(\.message)
+                .joined(separator: "\n")
+            if !diagnostic.isEmpty {
+                lastTerminalMessage = diagnostic
+            }
+            append("Thane requires operator attention and will not be restarted automatically", isError: true)
+            logger.error("thane exited with terminal code \(code); automatic restart disabled")
         } else {
             recentCrashTimestamps.append(Date())
             pruneStaleCrashes()
@@ -603,7 +794,7 @@ final class BinaryManager {
             logger.error("thane crashed, exit code \(code)")
         }
 
-        if !clean && shouldRun {
+        if !clean && code != ThaneInvocation.terminalExitCode && shouldRun {
             scheduleRestart()
         }
     }
@@ -632,6 +823,10 @@ final class BinaryManager {
             } else {
                 logger.info("\(trimmed, privacy: .public)")
             }
+            recentLogs.append(RuntimeLogEntry(date: Date(), message: trimmed, isError: isError))
+            if recentLogs.count > 250 {
+                recentLogs.removeFirst(recentLogs.count - 250)
+            }
             if detectedVersion == nil, let parsed = parseJSONLine(trimmed) {
                 detectedVersion = parsed.version
                 checkVersionCompatibility()
@@ -640,6 +835,20 @@ final class BinaryManager {
     }
 
     private struct ParsedLine { let version: String? }
+
+    nonisolated private static func commandWorkingDirectory(for workspace: URL) -> URL {
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: workspace.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            return workspace
+        }
+        let parent = workspace.deletingLastPathComponent()
+        if FileManager.default.fileExists(atPath: parent.path, isDirectory: &isDirectory),
+           isDirectory.boolValue {
+            return parent
+        }
+        return .homeDirectory
+    }
 
     private func parseJSONLine(_ line: String) -> ParsedLine? {
         guard line.hasPrefix("{"),
@@ -651,7 +860,7 @@ final class BinaryManager {
     }
 
     private func refreshState() {
-        guard !state.isRunning else { return }
+        guard !state.isRunning, state != .starting else { return }
         if let url = binaryURL, FileManager.default.fileExists(atPath: url.path) {
             state = .stopped
         } else {

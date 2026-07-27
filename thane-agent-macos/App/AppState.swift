@@ -59,9 +59,12 @@ final class AppState {
     }
 
     var menuBarSymbol: String {
-        switch connection.state {
-        case .connected: "brain.head.profile"
-        case .connecting, .authenticating, .reconnecting: "brain.head.profile.fill"
+        if case .needsAttention = binaryManager.state {
+            return "exclamationmark.shield"
+        }
+        return switch connection.state {
+        case .connected: "brain.head.profile.fill"
+        case .connecting, .authenticating, .reconnecting: "ellipsis.circle"
         case .disconnected: "brain.head.profile"
         }
     }
@@ -79,6 +82,7 @@ final class AppState {
     }
 
     /// Called by MainView on appear to bridge SwiftUI's openWindow action to AppKit contexts.
+    var openMainWindow: (() -> Void)?
     var openConsoleWindow: (() -> Void)?
     var openDashboardWindow: (() -> Void)?
     var openServerWindow: (() -> Void)?
@@ -140,7 +144,7 @@ final class AppState {
             case .running:
                 // Only auto-connect locally if not already connected to a remote server
                 if !self.isConnected { self.connectLocal() }
-            case .stopped, .crashed, .notConfigured:
+            case .stopped, .crashed, .needsAttention, .notConfigured:
                 if self.isLocallyConnected { self.disconnect() }
             default:
                 break

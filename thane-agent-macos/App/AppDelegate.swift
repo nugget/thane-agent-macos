@@ -13,6 +13,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let appState else { return nil }
         let menu = NSMenu()
 
+        let openItem = NSMenuItem(
+            title: "Open Thane",
+            action: #selector(openMain),
+            keyEquivalent: ""
+        )
+        openItem.target = self
+        menu.addItem(openItem)
+
         if appState.dashboardURL != nil {
             let item = NSMenuItem(
                 title: "Open Dashboard",
@@ -37,7 +45,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        true
+        if !flag {
+            appState?.openMainWindow?()
+        }
+        return true
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        appState?.binaryManager.prepareForApplicationTermination()
+    }
+
+    @objc private func openMain() {
+        appState?.openMainWindow?()
     }
 
     @objc private func openDashboard() {

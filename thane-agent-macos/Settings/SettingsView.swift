@@ -19,7 +19,8 @@ struct SettingsView: View {
                 PermissionsSettingsView()
             }
         }
-        .frame(width: 520)
+        .frame(width: 620)
+        .frame(minHeight: 520)
     }
 }
 
@@ -160,12 +161,62 @@ struct LocalServerSettingsView: View {
 
     var body: some View {
         Form {
-            Section("Binary") {
+            Section("Status") {
+                HStack(spacing: 12) {
+                    Image(systemName: statusIcon)
+                        .font(.title3)
+                        .foregroundStyle(stateColor)
+                        .frame(width: 28)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(manager.state.label)
+                            .font(.headline)
+                        Text(statusDetail)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+                    controlButtons
+                }
+
+                HStack {
+                    Button("Process Health…", systemImage: "waveform.path.ecg") {
+                        openWindow(id: "process-health")
+                    }
+                    .disabled(manager.state == .notConfigured)
+
+                    Spacer()
+
+                    Button("Reveal Workspace", systemImage: "folder") {
+                        NSWorkspace.shared.open(manager.workspaceURL)
+                    }
+                }
+                .controlSize(.small)
+            }
+
+            if case .needsAttention = manager.state {
+                Section {
+                    Label {
+                        Text(manager.lastValidationReport?.operatorSummary
+                             ?? "Thane cannot start until the signed core is repaired.")
+                    } icon: {
+                        Image(systemName: "exclamationmark.shield.fill")
+                            .foregroundStyle(.orange)
+                    }
+                } header: {
+                    Text("Operator Attention")
+                } footer: {
+                    Text("Automatic restart is paused for terminal exit 78. Process Health shows the exact findings and repair commands.")
+                }
+            }
+
+            Section {
                 pathRow(
                     label: "Executable",
                     url: manager.binaryURL,
                     placeholder: "Not found",
-                    hint: "Search paths: \(BinaryManager.searchPaths.map(\.lastPathComponent).joined(separator: ", "))",
+                    hint: "A signed Thane release managed by this app, or a development binary you select.",
                     startingDirectory: manager.binaryURL?.deletingLastPathComponent(),
                     canChooseFiles: true,
                     canChooseDirectories: false,
@@ -175,38 +226,37 @@ struct LocalServerSettingsView: View {
                     label: "Workspace",
                     url: manager.workspaceURL,
                     placeholder: "~/Thane/",
-                    hint: "Working directory — thane finds config.yaml here automatically",
+                    hint: "The instance root. Thane’s signed core, databases, archives, and generated state live here.",
                     startingDirectory: manager.workspaceURL,
                     canChooseFiles: false,
                     canChooseDirectories: true,
                     onPick: { manager.workspaceURL = $0 }
                 )
-                pathRow(
-                    label: "Config",
-                    url: manager.configURL,
-                    placeholder: "Auto (CWD + thane's discovery order)",
-                    hint: "Override only if config.yaml isn't in the workspace",
-                    startingDirectory: manager.configURL?.deletingLastPathComponent() ?? manager.workspaceURL,
-                    canChooseFiles: true,
-                    canChooseDirectories: false,
-                    onPick: { manager.configURL = $0 }
-                )
-            }
 
-            Section("Status") {
-                HStack {
-                    statusLabel
-                    Spacer()
-                    controlButtons
-                }
-
-                HStack {
-                    Spacer()
-                    Button("Process Health") {
-                        openWindow(id: "process-health")
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Signed Config")
+                            .frame(width: 90, alignment: .leading)
+                        Text(manager.canonicalConfigURL.path)
+                            .font(.caption.monospaced())
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                        Spacer()
+                        Button("Reveal") {
+                            NSWorkspace.shared.activateFileViewerSelecting([manager.canonicalConfigURL])
+                        }
+                        .controlSize(.small)
                     }
-                    .disabled(!manager.state.isRunning && manager.state != .stopped)
+                    Text("Always loaded from core/config.yaml and verified against signed history before launch.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, 90)
                 }
+            } header: {
+                Text("Managed Instance")
+            } footer: {
+                Text("Loading an arbitrary config bypasses Thane’s trust boundary, so recovery mode remains an explicit command-line operation rather than a persistent app preference.")
             }
 
             Section("Binary Updates") {
@@ -221,21 +271,40 @@ struct LocalServerSettingsView: View {
         .padding()
     }
 
-    private var statusLabel: some View {
-        Label {
-            Text(manager.state.label)
-        } icon: {
-            Circle()
-                .fill(stateColor)
-                .frame(width: 8, height: 8)
+    private var statusDetail: String {
+        switch manager.state {
+        case .running:
+            "The signed core is verified and the local agent is available."
+        case .starting:
+            "Verifying core/config.yaml and signed history…"
+        case .needsAttention:
+            "Startup is paused until the workspace is repaired."
+        case .crashed:
+            "The process exited unexpectedly and may be retried."
+        case .stopped:
+            "Ready to verify and start."
+        case .notConfigured:
+            "Choose or install a Thane binary."
+        }
+    }
+
+    private var statusIcon: String {
+        switch manager.state {
+        case .running: "checkmark.circle.fill"
+        case .starting: "checkmark.shield"
+        case .needsAttention: "exclamationmark.shield.fill"
+        case .crashed: "exclamationmark.triangle.fill"
+        case .stopped: "stop.circle"
+        case .notConfigured: "questionmark.circle"
         }
     }
 
     private var stateColor: Color {
         switch manager.state {
-        case .running:          .green
-        case .starting:         .yellow
-        case .crashed:          .red
+        case .running: .green
+        case .starting: .blue
+        case .needsAttention: .orange
+        case .crashed: .red
         case .stopped, .notConfigured: .secondary
         }
     }
@@ -244,12 +313,16 @@ struct LocalServerSettingsView: View {
     private var controlButtons: some View {
         switch manager.state {
         case .running:
-            Button("Stop", role: .destructive) { manager.stop() }
+            Button("Stop") { manager.stop() }
         case .stopped, .crashed:
-            Button("Start") { manager.start() }
+            Button("Check & Start") { manager.start() }
+                .buttonStyle(.borderedProminent)
                 .disabled(manager.binaryURL == nil)
+        case .needsAttention:
+            Button("Check Again") { manager.start() }
+                .buttonStyle(.borderedProminent)
         case .starting:
-            ProgressView().scaleEffect(0.7)
+            ProgressView().controlSize(.small)
         case .notConfigured:
             EmptyView()
         }
@@ -269,17 +342,18 @@ struct LocalServerSettingsView: View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(label)
-                    .frame(width: 70, alignment: .leading)
+                    .frame(width: 90, alignment: .leading)
 
                 Text(url?.path ?? placeholder)
-                    .font(.system(.caption, design: .monospaced))
+                    .font(.caption.monospaced())
                     .foregroundStyle(url != nil ? .primary : .secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
+                    .textSelection(.enabled)
 
                 Spacer()
 
-                Button("Browse...") {
+                Button("Choose…") {
                     let panel = NSOpenPanel()
                     panel.canChooseFiles = canChooseFiles
                     panel.canChooseDirectories = canChooseDirectories
@@ -294,6 +368,7 @@ struct LocalServerSettingsView: View {
             Text(hint)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .padding(.leading, 90)
         }
     }
 }

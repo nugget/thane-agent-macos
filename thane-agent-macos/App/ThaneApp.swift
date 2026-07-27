@@ -29,14 +29,17 @@ struct ThaneApp: App {
     }()
 
     var body: some Scene {
-        WindowGroup {
+        WindowGroup("Thane", id: "main") {
             MainView()
                 .environment(appState)
                 .onAppear { appDelegate.appState = appState }
         }
+        .defaultSize(width: 1100, height: 760)
+        .windowResizability(.contentMinSize)
         .modelContainer(Self.modelContainer)
         .commands {
             AboutCommands()
+            ThaneCommands()
         }
 
         MenuBarExtra {
@@ -56,7 +59,7 @@ struct ThaneApp: App {
             ProcessHealthView()
                 .environment(appState)
         }
-        .defaultSize(width: 400, height: 300)
+        .defaultSize(width: 620, height: 620)
         .windowResizability(.contentMinSize)
 
         Window("Dashboard", id: "dashboard") {
@@ -78,6 +81,40 @@ struct ThaneApp: App {
                 .environment(appState)
         }
         .windowResizability(.contentSize)
+    }
+}
+
+/// A small, deliberate command surface makes the app feel at home under the
+/// keyboard as well as the pointer. Window shortcuts follow the familiar
+/// numbered-inspector convention used by long-standing Mac utilities.
+private struct ThaneCommands: Commands {
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            Button("New Conversation") {
+                NotificationCenter.default.post(name: .newConversation, object: nil)
+                openWindow(id: "main")
+            }
+            .keyboardShortcut("n", modifiers: .command)
+        }
+
+        CommandMenu("Agent") {
+            Button("Server Status") {
+                openWindow(id: "server")
+            }
+            .keyboardShortcut("1", modifiers: .command)
+
+            Button("Web Dashboard") {
+                openWindow(id: "dashboard")
+            }
+            .keyboardShortcut("2", modifiers: .command)
+
+            Button("Local Thane") {
+                openWindow(id: "process-health")
+            }
+            .keyboardShortcut("3", modifiers: .command)
+        }
     }
 }
 

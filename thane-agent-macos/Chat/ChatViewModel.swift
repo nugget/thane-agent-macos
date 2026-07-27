@@ -56,7 +56,12 @@ final class ChatViewModel {
                 modelContext.insert(reply)
                 conversation.messages.append(reply)
                 conversation.updatedAt = Date()
-                try? modelContext.save()
+                do {
+                    try modelContext.save()
+                } catch {
+                    logger.error("Failed to save completed response: \(error.localizedDescription)")
+                    self.error = "Thane replied, but the conversation could not be saved: \(error.localizedDescription)"
+                }
 
                 streamingContent = ""
                 isStreaming = false
