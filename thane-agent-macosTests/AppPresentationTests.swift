@@ -11,6 +11,16 @@ struct AppPresentationTests {
     }
 
     @Test
+    func aboutVersionUsesStandardMacPhrasingWithFullProvenance() {
+        #expect(
+            AppVersion.formatAboutVersion(
+                current: "v1.4.0-3-gabc1234",
+                build: "42"
+            ) == "Version v1.4.0-3-gabc1234 (42)"
+        )
+    }
+
+    @Test
     func iconOnlyDoesNotInjectMenuBarText() {
         #expect(MenuBarTextStyle.iconOnly.text(status: "Ready", version: "v1.4.0") == nil)
     }
