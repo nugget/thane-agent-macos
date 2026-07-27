@@ -17,6 +17,10 @@ enum AppVersion {
     /// Display string, e.g. "v0.0.2-3-gcfd7ec6 (42)".
     static let displayVersion: String = "\(current) (\(build))"
 
+    /// Standard macOS About-panel phrasing while retaining the full
+    /// git-describe provenance that makes support reports actionable.
+    static let aboutVersion: String = formatAboutVersion(current: current, build: build)
+
     /// Git commit hash stamped at build time.
     static let gitCommit: String = BuildInfo.gitCommit
 
@@ -31,4 +35,8 @@ enum AppVersion {
 
     /// Parsed semantic version from the git describe string.
     static let semver: SemanticVersion? = SemanticVersion(current)
+
+    nonisolated static func formatAboutVersion(current: String, build: String) -> String {
+        "Version \(current) (\(build))"
+    }
 }

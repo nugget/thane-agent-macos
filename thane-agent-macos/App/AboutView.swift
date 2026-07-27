@@ -1,7 +1,10 @@
+import AppKit
 import SwiftUI
 
 struct AboutView: View {
     @Environment(AppState.self) private var appState
+    @State private var versionCopyFeedback = VersionCopyFeedback.idle
+    @State private var feedbackResetTask: Task<Void, Never>?
 
     private var manager: BinaryManager { appState.binaryManager }
 
@@ -16,9 +19,21 @@ struct AboutView: View {
                 Text("Thane for macOS")
                     .font(.title.weight(.semibold))
 
-                Text(AppVersion.current)
-                    .font(.subheadline.monospaced())
-                    .foregroundStyle(.secondary)
+                Button(action: copyVersion) {
+                    HStack(spacing: 6) {
+                        Text(AppVersion.aboutVersion)
+                        Image(systemName: versionCopyFeedback.symbol)
+                            .foregroundStyle(versionCopyFeedback.color)
+                            .contentTransition(.symbolEffect(.replace))
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .font(.subheadline.monospaced())
+                .foregroundStyle(.secondary)
+                .help(versionCopyFeedback.help)
+                .accessibilityLabel(versionCopyFeedback.accessibilityLabel)
+                .accessibilityHint("Copies the version to the clipboard")
 
                 if let buildDate = AppVersion.buildDate {
                     Text("Built \(buildDate, style: .date) by \(AppVersion.builtBy)")
@@ -63,6 +78,9 @@ struct AboutView: View {
         }
         .padding(24)
         .frame(width: 300)
+        .onDisappear {
+            feedbackResetTask?.cancel()
+        }
     }
 
     private func aboutLink(_ title: String, url: String) -> some View {
@@ -70,5 +88,62 @@ struct AboutView: View {
             .onHover { inside in
                 if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
             }
+    }
+
+    private func copyVersion() {
+        feedbackResetTask?.cancel()
+
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        versionCopyFeedback = pasteboard.setString(AppVersion.aboutVersion, forType: .string)
+            ? .copied
+            : .failed
+
+        feedbackResetTask = Task {
+            do {
+                try await Task.sleep(for: .seconds(1.5))
+            } catch {
+                return
+            }
+            versionCopyFeedback = .idle
+        }
+    }
+}
+
+private enum VersionCopyFeedback {
+    case idle
+    case copied
+    case failed
+
+    var symbol: String {
+        switch self {
+        case .idle: "doc.on.doc"
+        case .copied: "checkmark"
+        case .failed: "exclamationmark.triangle"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .idle: .secondary
+        case .copied: .green
+        case .failed: .red
+        }
+    }
+
+    var help: String {
+        switch self {
+        case .idle: "Copy Version"
+        case .copied: "Copied"
+        case .failed: "Copy Failed"
+        }
+    }
+
+    var accessibilityLabel: String {
+        switch self {
+        case .idle: "Copy \(AppVersion.aboutVersion)"
+        case .copied: "\(AppVersion.aboutVersion) copied"
+        case .failed: "Couldn’t copy \(AppVersion.aboutVersion)"
+        }
     }
 }
