@@ -467,6 +467,8 @@ final class BinaryManager {
 
     /// Called whenever state changes. AppState uses this to auto-connect the WebSocket.
     var onStateChange: ((State) -> Void)?
+    /// Called after a parsed entry enters the bounded runtime log buffer.
+    var onLogEntry: ((RuntimeLogEntry) -> Void)?
 
     /// URL of the thane binary. Set by the user or discovered automatically.
     var binaryURL: URL? {
@@ -1103,18 +1105,18 @@ final class BinaryManager {
             case .error:
                 logger.error("\(trimmed, privacy: .public)")
             }
-            recentLogs.append(
-                RuntimeLogEntry(
-                    date: presentation?.date ?? Date(),
-                    message: presentation?.message ?? RuntimeLogPresentation.bounded(
-                        trimmed,
-                        maxLength: RuntimeLogPresentation.maxMessageLength
-                    ),
-                    level: level,
-                    source: presentation?.source,
-                    fields: presentation?.fields ?? []
-                )
+            let entry = RuntimeLogEntry(
+                date: presentation?.date ?? Date(),
+                message: presentation?.message ?? RuntimeLogPresentation.bounded(
+                    trimmed,
+                    maxLength: RuntimeLogPresentation.maxMessageLength
+                ),
+                level: level,
+                source: presentation?.source,
+                fields: presentation?.fields ?? []
             )
+            recentLogs.append(entry)
+            onLogEntry?(entry)
             if detectedVersion == nil, let parsed = parseJSONLine(trimmed) {
                 detectedVersion = parsed.version
                 checkVersionCompatibility()

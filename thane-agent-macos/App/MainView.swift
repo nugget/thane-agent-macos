@@ -56,7 +56,9 @@ struct MainView: View {
         }
         .onAppear {
             appState.openMainWindow = { openWindow(id: "main") }
-            appState.openConsoleWindow = { openWindow(id: "process-health") }
+            appState.registerProcessHealthWindowOpener {
+                openWindow(id: "process-health")
+            }
             appState.openDashboardWindow = { openWindow(id: "dashboard") }
             appState.openServerWindow = { openWindow(id: "server") }
             connectRemoteIfAppropriate()

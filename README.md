@@ -73,7 +73,7 @@ If you want Thane to live on the same Mac as the companion app, let the app inst
 3. Point **Workspace** at your Thane directory (defaults to `~/Thane/`). A current Thane instance keeps its signed runtime config at `core/config.yaml`; `thane init ~/Thane` creates that core, or the app can initialize it when startup finds a missing workspace
 4. Click **Check & Start**. The app runs the same structured preflight as `thane validate`, then starts only when the config and signed core pass
 
-Once running, **Local Thane** shows live resource stats, signed-core status, code-signature provenance, recent activity, and restart controls. A terminal configuration failure (exit 78) pauses automatic restart and presents Thane's exact findings and repair commands instead of creating a crash loop. **Binary Updates** pulls newer signed releases when they land on GitHub; the app validates the active workspace with the staged binary before it atomically stops the process, swaps the binary, and restarts it.
+Once running, **Local Thane** shows live resource stats, signed-core status, code-signature provenance, recent activity, and restart controls. Optional Apple notifications can surface warnings quietly or errors actively, with separate controls for privacy, sound, repetition, retention, foreground delivery, and temporary muting. Repeated incidents replace themselves, bursts are summarized, and selecting a notification opens the relevant Process Health view. A terminal configuration failure (exit 78) pauses automatic restart and presents Thane's exact findings and repair commands instead of creating a crash loop. **Binary Updates** pulls newer signed releases when they land on GitHub; the app validates the active workspace with the staged binary before it atomically stops the process, swaps the binary, and restarts it.
 
 When a local Thane is running, the app auto-connects to `localhost` and prefers it over any remote URL you've configured — so you can keep a Remote entry as a fallback for when the local process is stopped.
 
@@ -109,7 +109,7 @@ Release notes and artifacts live at [Releases](https://github.com/nugget/thane-a
 - **Connection** — `ServerConnection.swift` (WebSocket client with auth handshake and platform request routing)
 - **Platform services** — `PlatformServiceRouter.swift` dispatches requests to registered providers (currently: `CalendarService`, `ContactsService`)
 - **Chat** — SwiftUI chat view backed by SwiftData (`Conversation`, `ChatMessage`)
-- **Local Thane** — Signed-core preflight, terminal-failure guidance, live resource stats, recent activity, and code-signature summary
+- **Local Thane** — Signed-core preflight, terminal-failure guidance, live resource stats, bounded recent activity, nuanced warning/error notifications, and code-signature summary
 
 ## Related
 

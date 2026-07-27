@@ -4,18 +4,21 @@ import AppKit
 import ServiceManagement
 
 struct SettingsView: View {
+    @Environment(AppState.self) private var appState
+
     var body: some View {
-        TabView {
-            Tab("General", systemImage: "gearshape") {
+        @Bindable var appState = appState
+        TabView(selection: $appState.selectedSettingsTab) {
+            Tab("General", systemImage: "gearshape", value: .general) {
                 GeneralSettingsView()
             }
-            Tab("Remote", systemImage: "network") {
+            Tab("Remote", systemImage: "network", value: .remote) {
                 ServerSettingsView()
             }
-            Tab("Local", systemImage: "desktopcomputer") {
+            Tab("Local", systemImage: "desktopcomputer", value: .local) {
                 LocalServerSettingsView()
             }
-            Tab("Permissions", systemImage: "lock.shield") {
+            Tab("Permissions", systemImage: "lock.shield", value: .permissions) {
                 PermissionsSettingsView()
             }
         }
@@ -158,6 +161,9 @@ struct LocalServerSettingsView: View {
     @Environment(\.openWindow) private var openWindow
 
     private var manager: BinaryManager { appState.binaryManager }
+    private var notificationManager: LocalThaneNotificationManager {
+        appState.localNotificationManager
+    }
 
     var body: some View {
         Form {
@@ -263,12 +269,201 @@ struct LocalServerSettingsView: View {
                 UpdateSettingsSection()
             }
 
+            notificationSettingsSection
+
             Section("Code Signature") {
                 CodeSignatureSection()
             }
         }
         .formStyle(.grouped)
         .padding()
+        .onAppear {
+            Task {
+                await notificationManager.refreshAuthorization()
+            }
+        }
+    }
+
+    private var notificationSettingsSection: some View {
+        Section {
+            notificationToggle(
+                title: "Errors",
+                detail: "Active notifications that are not automatically expired.",
+                isOn: Binding(
+                    get: { notificationManager.preferences.notifyOnErrors },
+                    set: { notificationManager.setErrorsEnabled($0) }
+                )
+            )
+
+            notificationToggle(
+                title: "Warnings",
+                detail: "Quiet notifications for lower-urgency events, with configurable retention.",
+                isOn: Binding(
+                    get: { notificationManager.preferences.notifyOnWarnings },
+                    set: { notificationManager.setWarningsEnabled($0) }
+                )
+            )
+
+            if notificationManager.preferences.isEnabled {
+                LabeledContent("Permission") {
+                    HStack(spacing: 8) {
+                        notificationAuthorizationBadge
+                        if notificationManager.authorization != .notRequested {
+                            Button("System Settings…") {
+                                notificationManager.openSystemNotificationSettings()
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                }
+
+                notificationToggle(
+                    title: "Play a sound for errors",
+                    detail: "Uses the standard alert sound when macOS permits notification sounds.",
+                    isOn: Binding(
+                        get: { notificationManager.preferences.playSoundForErrors },
+                        set: { notificationManager.setErrorSoundEnabled($0) }
+                    )
+                )
+                .disabled(!notificationManager.preferences.notifyOnErrors)
+
+                notificationToggle(
+                    title: "Include the log message",
+                    detail: "More useful at a glance, but may expose paths or operational details in previews.",
+                    isOn: Binding(
+                        get: { notificationManager.preferences.includeLogDetails },
+                        set: { notificationManager.setIncludeLogDetails($0) }
+                    )
+                )
+
+                notificationToggle(
+                    title: "Notify while Thane is active",
+                    detail: "Normally the in-app activity view is updated without interrupting you.",
+                    isOn: Binding(
+                        get: { notificationManager.preferences.notifyWhileAppIsActive },
+                        set: { notificationManager.setNotifyWhileActive($0) }
+                    )
+                )
+
+                if notificationManager.preferences.notifyOnErrors,
+                   notificationManager.preferences.playSoundForErrors,
+                   notificationManager.authorization == .allowed,
+                   !notificationManager.systemSoundsEnabled {
+                    Text("Notification sounds are currently disabled in System Settings.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+
+                Picker(
+                    "Repeat identical events",
+                    selection: Binding(
+                        get: { notificationManager.preferences.repeatInterval },
+                        set: { notificationManager.setRepeatInterval($0) }
+                    )
+                ) {
+                    ForEach(LocalNotificationRepeatInterval.allCases) { interval in
+                        Text(interval.title).tag(interval)
+                    }
+                }
+
+                if notificationManager.preferences.notifyOnWarnings {
+                    Picker(
+                        "Keep warnings",
+                        selection: Binding(
+                            get: { notificationManager.preferences.warningLifetime },
+                            set: { notificationManager.setWarningLifetime($0) }
+                        )
+                    ) {
+                        ForEach(WarningNotificationLifetime.allCases) { lifetime in
+                            Text(lifetime.title).tag(lifetime)
+                        }
+                    }
+                }
+
+                if let muteUntil = notificationManager.muteUntil {
+                    HStack {
+                        Label {
+                            Text("Muted until \(muteUntil, format: .dateTime.hour().minute())")
+                        } icon: {
+                            Image(systemName: "bell.slash.fill")
+                                .foregroundStyle(.orange)
+                        }
+                        Spacer()
+                        Button("Resume Now") {
+                            notificationManager.resumeNotifications()
+                        }
+                        .controlSize(.small)
+                    }
+                } else {
+                    HStack {
+                        Spacer()
+                        Button("Mute for 1 Hour", systemImage: "bell.slash") {
+                            notificationManager.mute(for: 60 * 60)
+                        }
+                        .controlSize(.small)
+                    }
+                }
+
+                if let error = notificationManager.lastDeliveryError {
+                    Label(error, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
+            }
+        } header: {
+            Text("Notifications")
+        } footer: {
+            Text(
+                "Errors use Active delivery; warnings use Passive delivery. "
+                + "Repeated events replace the same incident, bursts are summarized, "
+                + "and Notification Center keeps the latest 40 incidents. "
+                + "macOS controls banners versus persistent alerts, previews, sounds, and Focus."
+            )
+        }
+    }
+
+    private func notificationToggle(
+        title: String,
+        detail: String,
+        isOn: Binding<Bool>
+    ) -> some View {
+        Toggle(isOn: isOn) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var notificationAuthorizationBadge: some View {
+        if notificationManager.authorization == .allowed,
+           !notificationManager.systemAlertsEnabled {
+            Label("Alerts Off", systemImage: "bell.slash.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        } else {
+            switch notificationManager.authorization {
+            case .allowed:
+                Label("Allowed", systemImage: "checkmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            case .denied:
+                Label("Not Allowed", systemImage: "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            case .notRequested:
+                Text("Requested when enabled")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            case .unavailable:
+                Label("Unavailable", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+        }
     }
 
     private var statusDetail: String {
