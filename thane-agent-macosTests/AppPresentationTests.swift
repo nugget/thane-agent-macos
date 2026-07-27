@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import thane_agent_macos
 
@@ -31,6 +32,47 @@ struct AppPresentationTests {
                 status: "Connecting…",
                 version: nil
             ) == "Connecting…"
+        )
+    }
+
+    @Test
+    func advancedConnectionReusesOnlyAnExactActiveSelection() {
+        let url = URL(string: "https://thane.example.com")!
+        let active = ActiveServer(baseURL: url, token: "old-token", isLocal: false)
+
+        #expect(
+            AdvancedConnectionActivation.decide(
+                activeServer: active,
+                isConnected: true,
+                selectedURL: url,
+                selectedToken: "old-token",
+                forceReconnect: false
+            ) == .reuse
+        )
+        #expect(
+            AdvancedConnectionActivation.decide(
+                activeServer: active,
+                isConnected: true,
+                selectedURL: url,
+                selectedToken: "new-token",
+                forceReconnect: false
+            ) == .connect
+        )
+    }
+
+    @Test
+    func explicitReconnectNeverReusesAnActiveConnection() {
+        let url = URL(string: "https://thane.example.com")!
+        let active = ActiveServer(baseURL: url, token: "token", isLocal: false)
+
+        #expect(
+            AdvancedConnectionActivation.decide(
+                activeServer: active,
+                isConnected: true,
+                selectedURL: url,
+                selectedToken: "token",
+                forceReconnect: true
+            ) == .connect
         )
     }
 }

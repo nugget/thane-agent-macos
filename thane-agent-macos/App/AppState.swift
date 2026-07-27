@@ -11,6 +11,30 @@ nonisolated struct ActiveServer: Sendable, Equatable {
     let isLocal: Bool
 }
 
+nonisolated enum AdvancedConnectionActivation: Equatable {
+    case disconnect
+    case reuse
+    case connect
+
+    static func decide(
+        activeServer: ActiveServer?,
+        isConnected: Bool,
+        selectedURL: URL?,
+        selectedToken: String?,
+        forceReconnect: Bool
+    ) -> Self {
+        guard let selectedURL, let selectedToken else { return .disconnect }
+        if forceReconnect { return .connect }
+
+        let selection = ActiveServer(
+            baseURL: selectedURL,
+            token: selectedToken,
+            isLocal: false
+        )
+        return isConnected && activeServer == selection ? .reuse : .connect
+    }
+}
+
 enum AppSettingsTab: Hashable {
     case general
     case agent
@@ -334,15 +358,22 @@ final class AppState {
     /// when the chat window is closed.
     func selectConfiguration(
         _ mode: AgentConfigurationMode,
-        advancedConfig: ServerConfig? = nil
+        advancedConfig: ServerConfig? = nil,
+        forceReconnect: Bool = false
     ) {
         configurationMode = mode
-        activateSelectedConfiguration(advancedConfig: advancedConfig)
+        activateSelectedConfiguration(
+            advancedConfig: advancedConfig,
+            forceReconnect: forceReconnect
+        )
     }
 
     /// Activates the persisted configuration after SwiftData has made the
     /// optional Advanced connection available to the view layer.
-    func activateSelectedConfiguration(advancedConfig: ServerConfig?) {
+    func activateSelectedConfiguration(
+        advancedConfig: ServerConfig?,
+        forceReconnect: Bool = false
+    ) {
         switch configurationMode {
         case .managed:
             if activeServer?.isLocal == false {
@@ -356,10 +387,23 @@ final class AppState {
                 disconnect()
                 return
             }
-            if activeServer?.isLocal == false, isConnected {
+            let activation = AdvancedConnectionActivation.decide(
+                activeServer: activeServer,
+                isConnected: isConnected,
+                selectedURL: advancedConfig.url,
+                selectedToken: loadToken(for: advancedConfig),
+                forceReconnect: forceReconnect
+            )
+            switch activation {
+            case .disconnect:
+                // Reuse connect(config:) so invalid URLs and absent Keychain
+                // tokens retain their specific logs before clearing state.
+                connect(config: advancedConfig)
+            case .reuse:
                 return
+            case .connect:
+                connect(config: advancedConfig)
             }
-            connect(config: advancedConfig)
         }
     }
 

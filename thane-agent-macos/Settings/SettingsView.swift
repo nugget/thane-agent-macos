@@ -203,7 +203,11 @@ struct ServerSettingsView: View {
         do {
             let config = try saveConfig()
             saveError = nil
-            appState.selectConfiguration(.advanced, advancedConfig: config)
+            appState.selectConfiguration(
+                .advanced,
+                advancedConfig: config,
+                forceReconnect: true
+            )
         } catch {
             saveError = "Couldn’t save this connection: \(error.localizedDescription)"
         }
