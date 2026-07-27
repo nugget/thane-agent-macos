@@ -135,11 +135,7 @@ final class BinaryManager {
         case starting
         case running(pid: Int32)
         case crashed(code: Int32)
-<<<<<<< HEAD
-        case refused            // exit 78: thane declined to serve, retrying cannot help
-=======
         case needsAttention(code: Int32)
->>>>>>> origin/main
 
         var label: String {
             switch self {
@@ -148,11 +144,7 @@ final class BinaryManager {
             case .starting:         "Starting…"
             case .running:          "Running"
             case .crashed(let c):   "Crashed (exit \(c))"
-<<<<<<< HEAD
-            case .refused:          "Refused to Start"
-=======
             case .needsAttention:   "Needs Attention"
->>>>>>> origin/main
             }
         }
 
@@ -162,23 +154,13 @@ final class BinaryManager {
         }
     }
 
-    /// Exit status thane uses for a failure a restart cannot fix: an unverified
-    /// core, an unsigned config, a malformed command line. It is sysexits.h
-    /// EX_CONFIG, and it exists so supervisors stop retrying — restarting on it
-    /// turns one clear, actionable error into an endless stream of them.
-    nonisolated static let terminalExitCode: Int32 = 78
-
     // MARK: - Health
 
     enum HealthStatus: String {
         case healthy   = "Healthy"
         case degraded  = "Degraded"
         case crashLoop = "Crash Loop"
-<<<<<<< HEAD
-        case blocked   = "Needs Attention"
-=======
         case attention = "Needs Attention"
->>>>>>> origin/main
         case stopped   = "Stopped"
     }
 
@@ -506,15 +488,9 @@ final class BinaryManager {
         }
     }
 
-<<<<<<< HEAD
-    /// The thane instance this app supervises, passed as `-workspace`.
-    /// Thane resolves its config to `<workspace>/core/config.yaml`, where it
-    /// is signed and version-controlled. Defaults to ~/Thane/ on first run.
-=======
     /// Root containing the signed `core/` directory. Thane receives this path
     /// explicitly through `-workspace`; the process CWD is not trusted for
     /// configuration discovery. Defaults to ~/Thane/ on first run.
->>>>>>> origin/main
     var workspaceURL: URL {
         didSet {
             UserDefaults.standard.set(workspaceURL.path, forKey: "workspacePath")
@@ -531,18 +507,9 @@ final class BinaryManager {
         }
     }
 
-<<<<<<< HEAD
-    /// The config thane will load for this workspace. Derived, never chosen:
-    /// the only config thane can verify against its signed history is the one
-    /// inside core, so pointing the app elsewhere would mean launching an
-    /// instance that cannot pass its own startup gate.
-    var coreConfigURL: URL {
-        Self.coreConfigURL(workspace: workspaceURL)
-=======
     /// The only normal runtime config location: the signed config inside core.
     var canonicalConfigURL: URL {
         ThaneInvocation.canonicalConfigURL(workspace: workspaceURL)
->>>>>>> origin/main
     }
 
     private(set) var codeSignature: AppleCodeSignature?
@@ -555,12 +522,6 @@ final class BinaryManager {
     private(set) var processStats = ProcessStats()
     private(set) var recentCrashCount = 0
 
-    /// What thane printed when it refused to serve — the failing integrity
-    /// checks and the commands that fix them. Surfaced verbatim: these are
-    /// repaired with git outside the app, so the operator needs thane's own
-    /// instructions, not our paraphrase of them.
-    private(set) var refusalMessage: String?
-
     var healthStatus: HealthStatus {
         switch state {
         case .running:
@@ -571,15 +532,8 @@ final class BinaryManager {
             return .degraded
         case .starting:
             return recentCrashCount >= 3 ? .crashLoop : .healthy
-<<<<<<< HEAD
-        case .refused:
-            // Not a crash loop: nothing is looping, and nothing will until a
-            // human fixes the instance.
-            return .blocked
-=======
         case .needsAttention:
             return .attention
->>>>>>> origin/main
         case .stopped, .notConfigured:
             return .stopped
         }
@@ -606,11 +560,6 @@ final class BinaryManager {
     private var isPerformingMaintenance = false
     private var restartAttempt = 0
     private var recentCrashTimestamps: [Date] = []
-    /// Tail of the current run's stderr, kept so a refusal can be reported with
-    /// the text thane actually printed. Bounded — a refusal is a few dozen
-    /// lines and this must not grow with a chatty long-running process.
-    private var recentStderr: [String] = []
-    private static let stderrTailLimit = 80
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "binary")
 
     /// Whether the server should be running. Persisted across launches.
@@ -637,30 +586,6 @@ final class BinaryManager {
         ]
     }
 
-    // MARK: - Invocation
-
-    /// Argument vector for `thane serve` against `workspace`.
-    ///
-    /// The flag goes *before* the subcommand deliberately. Thane parses argv by
-    /// hand: once a subcommand has been seen, an unrecognized token is
-    /// collected as a subcommand argument, so a misspelled flag after it is
-    /// dropped silently and the binary resolves its instance from the working
-    /// directory instead. Before the subcommand, the same token hits the
-    /// `unknown flag` branch and the process exits non-zero.
-    ///
-    /// That is not hypothetical: it is how `--config` went unnoticed here for
-    /// as long as it did. Ordering the arguments this way turns the next
-    /// spelling mistake into a startup failure rather than a silent
-    /// misconfiguration.
-    nonisolated static func serveArguments(workspace: URL) -> [String] {
-        ["-workspace", workspace.path, "serve"]
-    }
-
-    /// The config thane resolves for `workspace`: `<workspace>/core/config.yaml`.
-    nonisolated static func coreConfigURL(workspace: URL) -> URL {
-        workspace.appending(components: "core", "config.yaml")
-    }
-
     // MARK: - Init
 
     init() {
@@ -677,15 +602,9 @@ final class BinaryManager {
         workspaceURL = UserDefaults.standard.string(forKey: "workspacePath")
             .map { URL(fileURLWithPath: $0) }
             ?? URL.homeDirectory.appending(path: "Thane")
-<<<<<<< HEAD
-        // Drop the config override persisted by earlier versions. Thane no
-        // longer accepts one without -insecure-config, and an instance
-        // launched that way is outside the trust boundary by construction.
-=======
         // PR 1260 retired arbitrary config selection from the normal runtime.
         // Discard the app's old preference so it cannot silently opt a managed
         // instance out of signed-core verification.
->>>>>>> origin/main
         UserDefaults.standard.removeObject(forKey: "configPath")
         refreshState()
         updateBinaryMtime()
@@ -751,20 +670,6 @@ final class BinaryManager {
         state = .starting
         detectedVersion = nil
         lastCPUSample = nil
-<<<<<<< HEAD
-        refusalMessage = nil
-        recentStderr.removeAll()
-        localConfig = LocalThaneConfig.parse(at: coreConfigURL)
-
-        let proc = Process()
-        proc.executableURL = url
-        proc.currentDirectoryURL = workspaceURL
-        // Name the instance rather than the config file. Thane derives the
-        // config from the workspace and verifies it against core's signed
-        // history before serving; handing it a path instead would either be
-        // ignored or, with -insecure-config, skip that check entirely.
-        proc.arguments = Self.serveArguments(workspace: workspaceURL)
-=======
         lastValidationReport = nil
         lastTerminalMessage = nil
         recentLogs.removeAll()
@@ -833,7 +738,6 @@ final class BinaryManager {
         proc.executableURL = binaryURL
         proc.currentDirectoryURL = workspaceURL
         proc.arguments = ThaneInvocation.serveArguments(workspace: workspaceURL)
->>>>>>> origin/main
 
         let out = Pipe()
         let err = Pipe()
@@ -1130,15 +1034,8 @@ final class BinaryManager {
         processStats = ProcessStats()
         flushProcessOutputRemainders()
 
-        // Clear the handlers, then read what is still buffered. thane writes
-        // the refusal immediately before exiting, so the final chunk may not
-        // have been delivered when terminationHandler fires — and that chunk
-        // is precisely the part worth keeping.
         stdoutPipe?.fileHandleForReading.readabilityHandler = nil
         stderrPipe?.fileHandleForReading.readabilityHandler = nil
-        if let remaining = Self.drainRemaining(stderrPipe) {
-            append(remaining, isError: true)
-        }
         stdoutPipe = nil
         stderrPipe = nil
         process = nil
@@ -1149,20 +1046,6 @@ final class BinaryManager {
             recentCrashTimestamps.removeAll()
             recentCrashCount = 0
             state = .stopped
-<<<<<<< HEAD
-            append("thane stopped", isError: false)
-        } else if code == Self.terminalExitCode {
-            // thane examined the instance and declined to serve it. The same
-            // input will produce the same refusal every time, so restarting
-            // would replace one actionable error with a stream of identical
-            // ones and bury the fix instructions in the log.
-            recentCrashTimestamps.removeAll()
-            recentCrashCount = 0
-            refusalMessage = Self.refusalSummary(fromStderr: recentStderr)
-            shouldRun = false
-            state = .refused
-            logger.error("thane refused to start (exit \(code)); not retrying")
-=======
             append("thane stopped", level: .info)
         } else if code == ThaneInvocation.terminalExitCode {
             shouldRun = false
@@ -1177,7 +1060,6 @@ final class BinaryManager {
             }
             append("Thane requires operator attention and will not be restarted automatically", level: .error)
             logger.error("thane exited with terminal code \(code); automatic restart disabled")
->>>>>>> origin/main
         } else {
             recentCrashTimestamps.append(Date())
             pruneStaleCrashes()
@@ -1186,56 +1068,9 @@ final class BinaryManager {
             logger.error("thane crashed, exit code \(code)")
         }
 
-<<<<<<< HEAD
-        if !clean && code != Self.terminalExitCode && shouldRun {
-=======
         if !clean && code != ThaneInvocation.terminalExitCode && shouldRun {
->>>>>>> origin/main
             scheduleRestart()
         }
-    }
-
-    /// Read whatever is still buffered in a pipe whose process has exited.
-    ///
-    /// The write end must be closed first: the parent holds its own copy, so
-    /// with the child gone there is still no EOF and the read would block on
-    /// a writer that will never write. Closing it makes EOF certain, and
-    /// nothing else can be writing by then.
-    nonisolated private static func drainRemaining(_ pipe: Pipe?) -> String? {
-        guard let pipe else { return nil }
-        try? pipe.fileHandleForWriting.close()
-        guard let data = try? pipe.fileHandleForReading.readToEnd(),
-              !data.isEmpty,
-              let text = String(data: data, encoding: .utf8),
-              !text.isEmpty
-        else { return nil }
-        return text
-    }
-
-    /// Extract the refusal thane printed from a run's captured stderr.
-    ///
-    /// Returns the text from the "refusing to start:" line onward, which is
-    /// where the failing check names and their fixes begin. Startup logging
-    /// would only bury the part that tells the operator what to do.
-    ///
-    /// Anchored on the line that *begins* with the marker, not one that merely
-    /// contains it: thane also logs a structured "refusing to start" record
-    /// with the check names as fields. That goes to stdout today while the
-    /// human message goes to stderr, but matching on the prefix means this
-    /// still picks the readable one if the streams are ever merged.
-    ///
-    /// Falls back to the whole tail when the marker is absent, since exit 78
-    /// also covers bad flags and unloadable configs.
-    nonisolated static func refusalSummary(fromStderr lines: [String]) -> String? {
-        let trimmed = lines.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        guard !trimmed.isEmpty else { return nil }
-        let marker = "refusing to start:"
-        if let start = trimmed.firstIndex(where: {
-            $0.trimmingCharacters(in: .whitespaces).hasPrefix(marker)
-        }) {
-            return trimmed[start...].joined(separator: "\n")
-        }
-        return trimmed.joined(separator: "\n")
     }
 
     private func scheduleRestart() {
@@ -1253,20 +1088,7 @@ final class BinaryManager {
         }
     }
 
-<<<<<<< HEAD
-    private func append(_ text: String, isError: Bool) {
-        if isError {
-            // Keep the raw lines, not the trimmed ones: thane indents each
-            // fix under the check it belongs to, and flattening that makes
-            // the refusal noticeably harder to read.
-            recentStderr.append(contentsOf: text.components(separatedBy: .newlines))
-            if recentStderr.count > Self.stderrTailLimit {
-                recentStderr.removeFirst(recentStderr.count - Self.stderrTailLimit)
-            }
-        }
-=======
     private func append(_ text: String, level fallbackLevel: RuntimeLogLevel) {
->>>>>>> origin/main
         for line in text.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { continue }

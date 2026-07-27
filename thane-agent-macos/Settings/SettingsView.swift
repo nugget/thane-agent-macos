@@ -232,20 +232,12 @@ struct LocalServerSettingsView: View {
                     label: "Workspace",
                     url: manager.workspaceURL,
                     placeholder: "~/Thane/",
-<<<<<<< HEAD
-                    hint: "Thane instance — config is read from core/config.yaml here",
-=======
                     hint: "The instance root. Thane’s signed core, databases, archives, and generated state live here.",
->>>>>>> origin/main
                     startingDirectory: manager.workspaceURL,
                     canChooseFiles: false,
                     canChooseDirectories: true,
                     onPick: { manager.workspaceURL = $0 }
                 )
-<<<<<<< HEAD
-            }
-=======
->>>>>>> origin/main
 
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
@@ -504,17 +496,10 @@ struct LocalServerSettingsView: View {
 
     private var stateColor: Color {
         switch manager.state {
-<<<<<<< HEAD
-        case .running:          .green
-        case .starting:         .yellow
-        case .crashed:          .red
-        case .refused:          .orange
-=======
         case .running: .green
         case .starting: .blue
         case .needsAttention: .orange
         case .crashed: .red
->>>>>>> origin/main
         case .stopped, .notConfigured: .secondary
         }
     }
@@ -528,18 +513,9 @@ struct LocalServerSettingsView: View {
             Button("Check & Start") { manager.start() }
                 .buttonStyle(.borderedProminent)
                 .disabled(manager.binaryURL == nil)
-<<<<<<< HEAD
-        case .refused:
-            // Matches Process Health: this is a retry after fixing the
-            // instance, not a normal start, and thane will refuse again
-            // until the workspace is repaired.
-            Button("Retry") { manager.start() }
-                .disabled(manager.binaryURL == nil)
-=======
         case .needsAttention:
             Button("Check Again") { manager.start() }
                 .buttonStyle(.borderedProminent)
->>>>>>> origin/main
         case .starting:
             ProgressView().controlSize(.small)
         case .notConfigured:

@@ -370,48 +370,12 @@ struct ProcessHealthView: View {
         }
     }
 
-<<<<<<< HEAD
-    private var stoppedMessage: some View {
-        VStack(spacing: 8) {
-            Image(systemName: stoppedIcon)
-                .font(.system(size: 32))
-                .foregroundStyle(.secondary)
-
-            Text(stoppedLabel)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            if case .crashed(let code) = manager.state {
-                Text("Exit code: \(code)")
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.red)
-            }
-
-            if case .refused = manager.state, let message = manager.refusalMessage {
-                // Verbatim, scrollable, selectable: the fixes are git commands
-                // the operator runs elsewhere, so they need to be copyable and
-                // must not be reflowed.
-                ScrollView {
-                    Text(message)
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 180)
-                .padding(8)
-                .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
-                .padding(.horizontal, 16)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-=======
     private func metadataSummary(_ fields: [BinaryManager.RuntimeLogField]) -> String {
         let visibleFields = fields.prefix(5)
             .map { "\($0.label): \($0.value)" }
             .joined(separator: "  •  ")
         let remainder = fields.count - min(fields.count, 5)
         return remainder > 0 ? "\(visibleFields)  •  +\(remainder) more" : visibleFields
->>>>>>> origin/main
     }
 
     private func logTint(_ level: BinaryManager.RuntimeLogLevel) -> Color {
@@ -433,19 +397,10 @@ struct ProcessHealthView: View {
                 Button("Check & Start", systemImage: "play.fill") { manager.start() }
                     .buttonStyle(.borderedProminent)
                     .disabled(manager.binaryURL == nil)
-<<<<<<< HEAD
-            case .refused:
-                Button("Retry") { manager.start() }
-                    .disabled(manager.binaryURL == nil)
-                Text("Fix the instance first — thane will refuse again until you do")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-=======
             case .needsAttention:
                 Button("Check Again", systemImage: "checkmark.shield") { manager.start() }
                     .buttonStyle(.borderedProminent)
                 Button("Reveal Core", systemImage: "folder") { revealCore() }
->>>>>>> origin/main
             case .starting:
                 ProgressView()
                     .controlSize(.small)
@@ -468,24 +423,6 @@ struct ProcessHealthView: View {
         .padding(.vertical, 11)
     }
 
-<<<<<<< HEAD
-    // MARK: - Helpers
-
-    private var healthColor: Color {
-        switch manager.healthStatus {
-        case .healthy:   .green
-        case .degraded:  .yellow
-        case .crashLoop: .red
-        case .blocked:   .orange
-        case .stopped:   .secondary
-        }
-    }
-
-    private var stoppedIcon: String {
-        switch manager.state {
-        case .crashed:       "exclamationmark.triangle"
-        case .refused:       "hand.raised.slash"
-=======
     private var stateIcon: String {
         switch manager.state {
         case .running: "checkmark.circle.fill"
@@ -493,25 +430,17 @@ struct ProcessHealthView: View {
         case .needsAttention: "exclamationmark.shield.fill"
         case .crashed: "exclamationmark.triangle.fill"
         case .stopped: "stop.circle"
->>>>>>> origin/main
         case .notConfigured: "questionmark.circle"
         }
     }
 
     private var stateTint: Color {
         switch manager.state {
-<<<<<<< HEAD
-        case .crashed:       "Process crashed"
-        case .refused:       "thane refused to start"
-        case .notConfigured: "No binary configured"
-        default:             "Process stopped"
-=======
         case .running: .green
         case .starting: .blue
         case .needsAttention: .orange
         case .crashed: .red
         case .stopped, .notConfigured: .secondary
->>>>>>> origin/main
         }
     }
 
