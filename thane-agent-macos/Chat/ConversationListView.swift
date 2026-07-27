@@ -142,7 +142,7 @@ struct ConversationListView: View {
         return sections.compactMap { section in
             let matches = section.conversations.filter {
                 $0.title.localizedCaseInsensitiveContains(query)
-                || $0.sortedMessages.contains { $0.content.localizedCaseInsensitiveContains(query) }
+                || $0.messages.contains { $0.content.localizedCaseInsensitiveContains(query) }
             }
             return matches.isEmpty ? nil : ConversationSection(title: section.title, conversations: matches)
         }
