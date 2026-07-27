@@ -4,7 +4,7 @@ import os
 
 /// Manages a local `thane` binary as a child process.
 ///
-/// Lifecycle: find → start → running → stop/crash → stopped
+/// Lifecycle: find → verify signed core → start → running → stop/crash → stopped
 ///
 /// The canonical managed install location is ~/Thane/bin/thane, matching
 /// the .pkg installer and the default workspace. For development, we also
@@ -24,7 +24,7 @@ import os
 /// read fields without actor hops. Without this, `xcodebuild test`
 /// rejects every reference with "Main actor-isolated ... can not be
 /// referenced from a nonisolated context."
-nonisolated struct LocalThaneConfig {
+nonisolated struct LocalThaneConfig: Sendable {
     var nativePort: Int = 8080
     var ollamaPort: Int = 11434
     /// Whether the companion WebSocket endpoint is enabled in the parsed
@@ -127,20 +127,24 @@ final class BinaryManager {
 
     // MARK: - State
 
+    nonisolated private static let maxPendingLogCharacters = 65_536
+
     enum State: Equatable {
         case notConfigured      // no binary found or set
         case stopped
         case starting
         case running(pid: Int32)
         case crashed(code: Int32)
+        case needsAttention(code: Int32)
 
         var label: String {
             switch self {
             case .notConfigured:    "Not Configured"
             case .stopped:          "Stopped"
-            case .starting:         "Starting..."
+            case .starting:         "Starting…"
             case .running:          "Running"
             case .crashed(let c):   "Crashed (exit \(c))"
+            case .needsAttention:   "Needs Attention"
             }
         }
 
@@ -156,6 +160,7 @@ final class BinaryManager {
         case healthy   = "Healthy"
         case degraded  = "Degraded"
         case crashLoop = "Crash Loop"
+        case attention = "Needs Attention"
         case stopped   = "Stopped"
     }
 
@@ -163,6 +168,278 @@ final class BinaryManager {
         var cpuPercent: Double = 0
         var residentMemoryMB: Double = 0
         var threadCount: Int = 0
+    }
+
+    nonisolated enum RuntimeLogLevel: String, CaseIterable, Identifiable, Sendable {
+        case trace
+        case debug
+        case info
+        case warn
+        case error
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .trace: "Trace"
+            case .debug: "Debug"
+            case .info: "Info"
+            case .warn: "Warnings"
+            case .error: "Errors"
+            }
+        }
+
+        private var severity: Int {
+            switch self {
+            case .trace: 0
+            case .debug: 1
+            case .info: 2
+            case .warn: 3
+            case .error: 4
+            }
+        }
+
+        func includes(_ candidate: RuntimeLogLevel) -> Bool {
+            candidate.severity >= severity
+        }
+
+        static func parse(from line: String) -> RuntimeLogLevel? {
+            if line.hasPrefix("{"),
+               let data = line.data(using: .utf8),
+               let envelope = try? JSONDecoder().decode(StructuredLogEnvelope.self, from: data),
+               let level = envelope.level {
+                return parse(name: level)
+            }
+
+            guard let token = line.split(separator: " ").first(where: {
+                $0.lowercased().hasPrefix("level=")
+            }) else {
+                return nil
+            }
+            let name = token.dropFirst("level=".count)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+            return parse(name: name)
+        }
+
+        static func parse(name: String) -> RuntimeLogLevel? {
+            switch name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "trace", "debug-4": .trace
+            case "debug": .debug
+            case "info": .info
+            case "warn", "warning": .warn
+            case "error": .error
+            default: nil
+            }
+        }
+
+        private struct StructuredLogEnvelope: Decodable {
+            let level: String?
+        }
+    }
+
+    nonisolated struct RuntimeLogField: Identifiable, Equatable, Sendable {
+        let key: String
+        let value: String
+
+        var id: String { key }
+
+        var label: String {
+            key.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+
+    nonisolated struct RuntimeLogPresentation: Equatable, Sendable {
+        static let maxMessageLength = 2_000
+        static let maxMetadataFields = 12
+        static let maxMetadataKeyLength = 80
+        static let maxSourceLength = 300
+
+        let date: Date?
+        let level: RuntimeLogLevel?
+        let message: String
+        let source: String?
+        let fields: [RuntimeLogField]
+
+        static func parse(from line: String) -> RuntimeLogPresentation? {
+            guard line.hasPrefix("{"),
+                  let data = line.data(using: .utf8),
+                  let values = try? JSONDecoder().decode([String: JSONLogValue].self, from: data),
+                  let message = values["msg"]?.stringValue
+            else {
+                return nil
+            }
+
+            let suppressedKeys: Set<String> = [
+                "time",
+                "level",
+                "msg",
+                "source",
+                "thane_version",
+                "thane_commit",
+            ]
+            let fields = values
+                .filter { !suppressedKeys.contains($0.key) }
+                .map {
+                    RuntimeLogField(
+                        key: bounded($0.key, maxLength: maxMetadataKeyLength),
+                        value: $0.value.displayValue(maxLength: 160)
+                    )
+                }
+                .sorted { $0.key.localizedStandardCompare($1.key) == .orderedAscending }
+
+            return RuntimeLogPresentation(
+                date: values["time"]?.stringValue.flatMap(parseTimestamp),
+                level: values["level"]?.stringValue.flatMap(RuntimeLogLevel.parse(name:)),
+                message: bounded(message, maxLength: maxMessageLength),
+                source: values["source"]?.sourceValue.map {
+                    bounded($0, maxLength: maxSourceLength)
+                },
+                fields: Array(fields.prefix(maxMetadataFields))
+            )
+        }
+
+        static func bounded(_ value: String, maxLength: Int) -> String {
+            guard value.count > maxLength else { return value }
+            return String(value.prefix(maxLength - 1)) + "…"
+        }
+
+        private static func parseTimestamp(_ value: String) -> Date? {
+            if let date = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value) {
+                return date
+            }
+            return try? Date.ISO8601FormatStyle().parse(value)
+        }
+    }
+
+    nonisolated struct RuntimeLogEntry: Identifiable, Sendable {
+        let id = UUID()
+        let date: Date
+        let message: String
+        let level: RuntimeLogLevel
+        let source: String?
+        let fields: [RuntimeLogField]
+
+        var isError: Bool { level == .error }
+    }
+
+    nonisolated struct RuntimeLogBuffer: Sendable {
+        static let defaultCapacity = 250
+
+        private(set) var capacity: Int
+        private var storage: [RuntimeLogEntry] = []
+        private var nextWriteIndex = 0
+
+        init(capacity: Int = defaultCapacity) {
+            precondition(capacity > 0)
+            self.capacity = capacity
+            storage.reserveCapacity(capacity)
+        }
+
+        var isEmpty: Bool { storage.isEmpty }
+        var count: Int { storage.count }
+
+        var entries: [RuntimeLogEntry] {
+            guard storage.count == capacity, nextWriteIndex != 0 else {
+                return storage
+            }
+            return Array(storage[nextWriteIndex...]) + Array(storage[..<nextWriteIndex])
+        }
+
+        mutating func append(_ entry: RuntimeLogEntry) {
+            if storage.count < capacity {
+                storage.append(entry)
+                return
+            }
+            storage[nextWriteIndex] = entry
+            nextWriteIndex = (nextWriteIndex + 1) % capacity
+        }
+
+        mutating func removeAll() {
+            storage.removeAll(keepingCapacity: true)
+            nextWriteIndex = 0
+        }
+    }
+
+    nonisolated private indirect enum JSONLogValue: Decodable, Sendable {
+        case string(String)
+        case integer(Int)
+        case number(Double)
+        case boolean(Bool)
+        case object([String: JSONLogValue])
+        case array([JSONLogValue])
+        case null
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if container.decodeNil() {
+                self = .null
+            } else if let value = try? container.decode(String.self) {
+                self = .string(value)
+            } else if let value = try? container.decode(Bool.self) {
+                self = .boolean(value)
+            } else if let value = try? container.decode(Int.self) {
+                self = .integer(value)
+            } else if let value = try? container.decode(Double.self) {
+                self = .number(value)
+            } else if let value = try? container.decode([String: JSONLogValue].self) {
+                self = .object(value)
+            } else if let value = try? container.decode([JSONLogValue].self) {
+                self = .array(value)
+            } else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "Unsupported JSON log value"
+                )
+            }
+        }
+
+        var stringValue: String? {
+            guard case .string(let value) = self else { return nil }
+            return value
+        }
+
+        var sourceValue: String? {
+            switch self {
+            case .string(let value):
+                return value
+            case .object(let values):
+                guard let file = values["file"]?.stringValue else { return nil }
+                if case .integer(let line)? = values["line"] {
+                    return "\(file):\(line)"
+                }
+                return file
+            default:
+                return nil
+            }
+        }
+
+        func displayValue(maxLength: Int) -> String {
+            let value: String
+            switch self {
+            case .string(let string):
+                value = string
+            case .integer(let integer):
+                value = String(integer)
+            case .number(let number):
+                value = number.formatted(.number.precision(.fractionLength(0...3)))
+            case .boolean(let boolean):
+                value = boolean ? "true" : "false"
+            case .object(let object):
+                value = object
+                    .map { "\($0.key): \($0.value.displayValue(maxLength: maxLength))" }
+                    .sorted()
+                    .joined(separator: ", ")
+            case .array(let array):
+                value = array
+                    .map { $0.displayValue(maxLength: maxLength) }
+                    .joined(separator: ", ")
+            case .null:
+                value = "null"
+            }
+
+            guard value.count > maxLength else { return value }
+            return String(value.prefix(maxLength - 1)) + "…"
+        }
     }
 
     /// How the managed binary was installed. Determines what trust signals
@@ -184,9 +461,14 @@ final class BinaryManager {
     private(set) var startedAt: Date?
     private(set) var detectedVersion: String?
     private(set) var localConfig: LocalThaneConfig = .defaults
+    private(set) var lastValidationReport: ThaneValidationReport?
+    private(set) var lastTerminalMessage: String?
+    private(set) var recentLogs = RuntimeLogBuffer()
 
     /// Called whenever state changes. AppState uses this to auto-connect the WebSocket.
     var onStateChange: ((State) -> Void)?
+    /// Called after a parsed entry enters the bounded runtime log buffer.
+    var onLogEntry: ((RuntimeLogEntry) -> Void)?
 
     /// URL of the thane binary. Set by the user or discovered automatically.
     var binaryURL: URL? {
@@ -200,23 +482,34 @@ final class BinaryManager {
             updateBinaryMtime()
             Task { await refreshCodeSignature() }
             startWatchingBinary()
+            if oldValue != binaryURL, state.isRunning {
+                restart()
+            }
         }
     }
 
-    /// Working directory for the thane process. Thane's config discovery
-    /// includes CWD, so ~/Thane/config.yaml is found automatically when
-    /// workspaceURL is ~/Thane/. Defaults to ~/Thane/ on first run.
+    /// Root containing the signed `core/` directory. Thane receives this path
+    /// explicitly through `-workspace`; the process CWD is not trusted for
+    /// configuration discovery. Defaults to ~/Thane/ on first run.
     var workspaceURL: URL {
         didSet {
             UserDefaults.standard.set(workspaceURL.path, forKey: "workspacePath")
+            guard oldValue != workspaceURL else { return }
+            lastValidationReport = nil
+            lastTerminalMessage = nil
+            if state.isRunning {
+                restart()
+            } else if state == .starting {
+                stop()
+            } else {
+                refreshState()
+            }
         }
     }
 
-    /// Explicit config path. Leave nil to rely on CWD + thane's discovery order.
-    var configURL: URL? {
-        didSet {
-            UserDefaults.standard.set(configURL?.path, forKey: "configPath")
-        }
+    /// The only normal runtime config location: the signed config inside core.
+    var canonicalConfigURL: URL {
+        ThaneInvocation.canonicalConfigURL(workspace: workspaceURL)
     }
 
     private(set) var codeSignature: AppleCodeSignature?
@@ -239,6 +532,8 @@ final class BinaryManager {
             return .degraded
         case .starting:
             return recentCrashCount >= 3 ? .crashLoop : .healthy
+        case .needsAttention:
+            return .attention
         case .stopped, .notConfigured:
             return .stopped
         }
@@ -254,6 +549,9 @@ final class BinaryManager {
     private var process: Process?
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
+    private var stdoutRemainder = ""
+    private var stderrRemainder = ""
+    private var startTask: Task<Void, Never>?
     private var restartTask: Task<Void, Never>?
     private var statsTask: Task<Void, Never>?
     private var binaryWatcher: DirectoryWatcher?
@@ -304,9 +602,10 @@ final class BinaryManager {
         workspaceURL = UserDefaults.standard.string(forKey: "workspacePath")
             .map { URL(fileURLWithPath: $0) }
             ?? URL.homeDirectory.appending(path: "Thane")
-        if let path = UserDefaults.standard.string(forKey: "configPath") {
-            configURL = URL(fileURLWithPath: path)
-        }
+        // PR 1260 retired arbitrary config selection from the normal runtime.
+        // Discard the app's old preference so it cannot silently opt a managed
+        // instance out of signed-core verification.
+        UserDefaults.standard.removeObject(forKey: "configPath")
         refreshState()
         updateBinaryMtime()
         Task { await refreshCodeSignature() }
@@ -322,13 +621,28 @@ final class BinaryManager {
     func autoStartIfNeeded() {
         guard shouldRun, case .stopped = state else { return }
         let workspace = workspaceURL
-        Task { @MainActor [weak self] in
+        Task { [weak self] in
             guard let self else { return }
-            do {
-                _ = try FileManager.default.contentsOfDirectory(atPath: workspace.path)
-            } catch {
-                logger.error("Workspace is inaccessible at startup: \(workspace.path, privacy: .public); auto-start aborted: \(error.localizedDescription, privacy: .public)")
-                append("Auto-start aborted: workspace is inaccessible at \(workspace.path)", isError: true)
+            let accessError = await Task.detached(priority: .utility) {
+                var isDirectory: ObjCBool = false
+                guard FileManager.default.fileExists(atPath: workspace.path, isDirectory: &isDirectory) else {
+                    // A missing first-run workspace is a valid state. Let
+                    // structured preflight describe it and offer initialization.
+                    return nil as String?
+                }
+                guard isDirectory.boolValue else {
+                    return "The workspace path exists but is not a directory."
+                }
+                do {
+                    _ = try FileManager.default.contentsOfDirectory(atPath: workspace.path)
+                    return nil as String?
+                } catch {
+                    return error.localizedDescription
+                }
+            }.value
+            if let accessError {
+                logger.error("Workspace is inaccessible at startup: \(workspace.path, privacy: .public); auto-start aborted: \(accessError, privacy: .public)")
+                append("Auto-start aborted: workspace is inaccessible at \(workspace.path)", level: .error)
                 shouldRun = false
                 return
             }
@@ -339,26 +653,91 @@ final class BinaryManager {
     }
 
     func start() {
+        startTask?.cancel()
+        startTask = nil
         restartTask?.cancel()
         restartTask = nil
         guard let url = binaryURL,
-              FileManager.default.fileExists(atPath: url.path),
-              !state.isRunning else { return }
+              FileManager.default.fileExists(atPath: url.path) else { return }
+        switch state {
+        case .stopped, .crashed, .needsAttention:
+            break
+        case .notConfigured, .starting, .running:
+            return
+        }
 
         shouldRun = true
         state = .starting
         detectedVersion = nil
         lastCPUSample = nil
-        localConfig = LocalThaneConfig.parse(at: configURL ?? workspaceURL.appending(path: "config.yaml"))
+        lastValidationReport = nil
+        lastTerminalMessage = nil
+        recentLogs.removeAll()
 
-        let proc = Process()
-        proc.executableURL = url
-        proc.currentDirectoryURL = workspaceURL
-        var args = ["serve"]
-        if let configPath = configURL?.path {
-            args += ["--config", configPath]
+        let workspace = workspaceURL
+        let configURL = canonicalConfigURL
+        startTask = Task { [weak self] in
+            do {
+                let result = try await Task.detached(priority: .userInitiated) {
+                    let config = LocalThaneConfig.parse(at: configURL)
+                    let workingDirectory = ThaneInvocation.commandWorkingDirectory(for: workspace)
+                    let validation = try ThaneProcessRunner.run(
+                        executable: url,
+                        arguments: ThaneInvocation.validationArguments(workspace: workspace),
+                        workingDirectory: workingDirectory
+                    )
+                    return (config, validation)
+                }.value
+                guard let self, !Task.isCancelled, shouldRun, state == .starting else { return }
+                localConfig = result.0
+                handlePreflight(result.1, binaryURL: url)
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                shouldRun = false
+                state = .crashed(code: 1)
+                lastTerminalMessage = "Could not validate this workspace: \(error.localizedDescription)"
+                append(lastTerminalMessage ?? "Validation failed", level: .error)
+            }
         }
-        proc.arguments = args
+    }
+
+    private func handlePreflight(_ outcome: ThaneProcessOutcome, binaryURL: URL) {
+        let report = ThaneValidationReport.parse(outcome.stdout)
+        lastValidationReport = report
+
+        if let report {
+            guard report.passed, outcome.exitCode == 0 else {
+                shouldRun = false
+                state = .needsAttention(code: outcome.exitCode)
+                lastTerminalMessage = report.operatorSummary
+                append("Startup blocked: \(report.operatorSummary)", level: .error)
+                logger.error("Core preflight failed; refusing to start local thane (exit \(outcome.exitCode))")
+                return
+            }
+            append("Signed core verified", level: .info)
+            launchServe(binaryURL: binaryURL)
+            return
+        }
+
+        shouldRun = false
+        let combinedOutput = (outcome.stdout + "\n" + outcome.stderr)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        lastTerminalMessage = combinedOutput.isEmpty
+            ? "This Thane version cannot prove signed-core integrity. Update Thane before starting it from this app."
+            : combinedOutput
+        state = .needsAttention(
+            code: outcome.exitCode == 0 ? ThaneInvocation.terminalExitCode : outcome.exitCode
+        )
+        append(lastTerminalMessage ?? "Signed-core validation was unavailable", level: .error)
+        logger.error("Thane did not emit a structured integrity report; refusing to start")
+    }
+
+    private func launchServe(binaryURL: URL) {
+        guard shouldRun, state == .starting else { return }
+        let proc = Process()
+        proc.executableURL = binaryURL
+        proc.currentDirectoryURL = workspaceURL
+        proc.arguments = ThaneInvocation.serveArguments(workspace: workspaceURL)
 
         let out = Pipe()
         let err = Pipe()
@@ -366,17 +745,19 @@ final class BinaryManager {
         proc.standardError = err
         stdoutPipe = out
         stderrPipe = err
+        stdoutRemainder.removeAll(keepingCapacity: true)
+        stderrRemainder.removeAll(keepingCapacity: true)
 
         out.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor [weak self] in self?.append(text, isError: false) }
+            Task { @MainActor [weak self] in self?.ingestProcessOutput(text, stream: .stdout) }
         }
 
         err.fileHandleForReading.readabilityHandler = { [weak self] handle in
             let data = handle.availableData
             guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-            Task { @MainActor [weak self] in self?.append(text, isError: true) }
+            Task { @MainActor [weak self] in self?.ingestProcessOutput(text, stream: .stderr) }
         }
 
         proc.terminationHandler = { [weak self] p in
@@ -390,22 +771,38 @@ final class BinaryManager {
             restartAttempt = 0
             state = .running(pid: proc.processIdentifier)
             startStatsPolling(pid: proc.processIdentifier)
-            append("thane started (pid \(proc.processIdentifier))", isError: false)
+            append("thane started (pid \(proc.processIdentifier))", level: .info)
             logger.info("thane started, pid \(proc.processIdentifier)")
         } catch {
             state = .stopped
-            append("Failed to start: \(error.localizedDescription)", isError: true)
+            append("Failed to start: \(error.localizedDescription)", level: .error)
             logger.error("Failed to start thane: \(error.localizedDescription)")
         }
     }
 
     func stop() {
         shouldRun = false
+        startTask?.cancel()
+        startTask = nil
         restartTask?.cancel()
         restartTask = nil
+        if case .starting = state {
+            state = .stopped
+            return
+        }
         guard state.isRunning else { return }
         process?.terminate()
         // State update happens in terminationHandler.
+    }
+
+    /// Stop in-flight launch work and signal the managed child before the app
+    /// exits, while preserving `shouldRun` so launch-at-login can restore the
+    /// operator's intent next time.
+    func prepareForApplicationTermination() {
+        startTask?.cancel()
+        restartTask?.cancel()
+        statsTask?.cancel()
+        process?.terminate()
     }
 
     func restart() {
@@ -419,6 +816,59 @@ final class BinaryManager {
             }
         } else {
             start()
+        }
+    }
+
+    var canInitializeWorkspace: Bool {
+        lastValidationReport?.integrity?.failures.contains {
+            $0.name == "core_directory"
+        } == true
+    }
+
+    /// Create the workspace's signed core using thane's own idempotent
+    /// bootstrap, then immediately run the normal verification-and-start path.
+    func initializeWorkspace() {
+        guard canInitializeWorkspace, let binaryURL else { return }
+
+        startTask?.cancel()
+        restartTask?.cancel()
+        state = .starting
+        shouldRun = true
+        append("Initializing the signed workspace…", level: .info)
+
+        let workspace = workspaceURL
+        startTask = Task { [weak self] in
+            do {
+                let outcome = try await Task.detached(priority: .userInitiated) {
+                    try ThaneProcessRunner.run(
+                        executable: binaryURL,
+                        arguments: ThaneInvocation.initializationArguments(workspace: workspace),
+                        workingDirectory: ThaneInvocation.commandWorkingDirectory(for: workspace)
+                    )
+                }.value
+                guard let self, !Task.isCancelled else { return }
+                guard outcome.exitCode == 0 else {
+                    shouldRun = false
+                    state = outcome.exitCode == ThaneInvocation.terminalExitCode
+                        ? .needsAttention(code: outcome.exitCode)
+                        : .crashed(code: outcome.exitCode)
+                    let message = outcome.stderr.isEmpty ? outcome.stdout : outcome.stderr
+                    lastTerminalMessage = message.trimmingCharacters(in: .whitespacesAndNewlines)
+                    append(lastTerminalMessage ?? "Workspace initialization failed", level: .error)
+                    return
+                }
+
+                append("Workspace initialized", level: .info)
+                state = .stopped
+                startTask = nil
+                start()
+            } catch {
+                guard let self, !Task.isCancelled else { return }
+                shouldRun = false
+                state = .crashed(code: 1)
+                lastTerminalMessage = "Could not initialize this workspace: \(error.localizedDescription)"
+                append(lastTerminalMessage ?? "Workspace initialization failed", level: .error)
+            }
         }
     }
 
@@ -578,9 +1028,11 @@ final class BinaryManager {
     // MARK: - Private
 
     private func handleTermination(code: Int32) {
+        startTask = nil
         statsTask?.cancel()
         statsTask = nil
         processStats = ProcessStats()
+        flushProcessOutputRemainders()
 
         stdoutPipe?.fileHandleForReading.readabilityHandler = nil
         stderrPipe?.fileHandleForReading.readabilityHandler = nil
@@ -594,16 +1046,29 @@ final class BinaryManager {
             recentCrashTimestamps.removeAll()
             recentCrashCount = 0
             state = .stopped
-            append("thane stopped", isError: false)
+            append("thane stopped", level: .info)
+        } else if code == ThaneInvocation.terminalExitCode {
+            shouldRun = false
+            state = .needsAttention(code: code)
+            let diagnostic = recentLogs.entries
+                .filter(\.isError)
+                .suffix(16)
+                .map(\.message)
+                .joined(separator: "\n")
+            if !diagnostic.isEmpty {
+                lastTerminalMessage = diagnostic
+            }
+            append("Thane requires operator attention and will not be restarted automatically", level: .error)
+            logger.error("thane exited with terminal code \(code); automatic restart disabled")
         } else {
             recentCrashTimestamps.append(Date())
             pruneStaleCrashes()
             state = .crashed(code: code)
-            append("thane exited with code \(code)", isError: true)
+            append("thane exited with code \(code)", level: .error)
             logger.error("thane crashed, exit code \(code)")
         }
 
-        if !clean && shouldRun {
+        if !clean && code != ThaneInvocation.terminalExitCode && shouldRun {
             scheduleRestart()
         }
     }
@@ -612,7 +1077,7 @@ final class BinaryManager {
         restartAttempt += 1
         // Exponential backoff: 2, 4, 8, 16, 32, 60 seconds (capped).
         let delay = min(Double(1 << min(restartAttempt, 6)), 60.0)
-        append("Restarting in \(Int(delay))s (attempt \(restartAttempt))…", isError: false)
+        append("Restarting in \(Int(delay))s (attempt \(restartAttempt))…", level: .info)
         logger.info("Scheduling restart in \(delay)s (attempt \(self.restartAttempt))")
 
         restartTask = Task { [weak self] in
@@ -623,20 +1088,111 @@ final class BinaryManager {
         }
     }
 
-    private func append(_ text: String, isError: Bool) {
+    private func append(_ text: String, level fallbackLevel: RuntimeLogLevel) {
         for line in text.components(separatedBy: .newlines) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             guard !trimmed.isEmpty else { continue }
-            if isError {
-                logger.error("\(trimmed, privacy: .public)")
-            } else {
+
+            let presentation = RuntimeLogPresentation.parse(from: trimmed)
+            let level = presentation?.level ?? RuntimeLogLevel.parse(from: trimmed) ?? fallbackLevel
+            switch level {
+            case .trace, .debug:
+                logger.debug("\(trimmed, privacy: .public)")
+            case .info:
                 logger.info("\(trimmed, privacy: .public)")
+            case .warn:
+                logger.warning("\(trimmed, privacy: .public)")
+            case .error:
+                logger.error("\(trimmed, privacy: .public)")
             }
+            let entry = RuntimeLogEntry(
+                date: presentation?.date ?? Date(),
+                message: presentation?.message ?? RuntimeLogPresentation.bounded(
+                    trimmed,
+                    maxLength: RuntimeLogPresentation.maxMessageLength
+                ),
+                level: level,
+                source: presentation?.source,
+                fields: presentation?.fields ?? []
+            )
+            recentLogs.append(entry)
+            onLogEntry?(entry)
             if detectedVersion == nil, let parsed = parseJSONLine(trimmed) {
                 detectedVersion = parsed.version
                 checkVersionCompatibility()
             }
         }
+    }
+
+    private enum ProcessLogStream {
+        case stdout
+        case stderr
+
+        var fallbackLevel: RuntimeLogLevel {
+            switch self {
+            case .stdout: .info
+            case .stderr: .error
+            }
+        }
+    }
+
+    private func ingestProcessOutput(_ chunk: String, stream: ProcessLogStream) {
+        let lines: [String]
+        switch stream {
+        case .stdout:
+            lines = Self.extractCompleteLogLines(buffer: &stdoutRemainder, appending: chunk)
+        case .stderr:
+            lines = Self.extractCompleteLogLines(buffer: &stderrRemainder, appending: chunk)
+        }
+        for line in lines {
+            append(line, level: stream.fallbackLevel)
+        }
+    }
+
+    private func flushProcessOutputRemainders() {
+        if !stdoutRemainder.isEmpty {
+            append(stdoutRemainder, level: .info)
+            stdoutRemainder.removeAll(keepingCapacity: true)
+        }
+        if !stderrRemainder.isEmpty {
+            append(stderrRemainder, level: .error)
+            stderrRemainder.removeAll(keepingCapacity: true)
+        }
+    }
+
+    nonisolated static func extractCompleteLogLines(
+        buffer: inout String,
+        appending chunk: String
+    ) -> [String] {
+        let combined = buffer + chunk
+        var parts = combined.split(separator: "\n", omittingEmptySubsequences: false)
+        if combined.hasSuffix("\n") {
+            buffer.removeAll(keepingCapacity: true)
+            if parts.last?.isEmpty == true {
+                parts.removeLast()
+            }
+            return parts.map {
+                RuntimeLogPresentation.bounded(
+                    String($0),
+                    maxLength: maxPendingLogCharacters
+                )
+            }
+        }
+
+        buffer = parts.popLast().map(String.init) ?? ""
+        var completeLines = parts.map {
+            RuntimeLogPresentation.bounded(
+                String($0),
+                maxLength: maxPendingLogCharacters
+            )
+        }
+        if buffer.count > maxPendingLogCharacters {
+            completeLines.append(
+                RuntimeLogPresentation.bounded(buffer, maxLength: maxPendingLogCharacters)
+            )
+            buffer.removeAll(keepingCapacity: true)
+        }
+        return completeLines
     }
 
     private struct ParsedLine { let version: String? }
@@ -651,7 +1207,7 @@ final class BinaryManager {
     }
 
     private func refreshState() {
-        guard !state.isRunning else { return }
+        guard !state.isRunning, state != .starting else { return }
         if let url = binaryURL, FileManager.default.fileExists(atPath: url.path) {
             state = .stopped
         } else {

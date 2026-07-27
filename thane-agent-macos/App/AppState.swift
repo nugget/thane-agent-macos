@@ -11,6 +11,13 @@ nonisolated struct ActiveServer: Sendable, Equatable {
     let isLocal: Bool
 }
 
+enum AppSettingsTab: Hashable {
+    case general
+    case remote
+    case local
+    case permissions
+}
+
 /// Central application state coordinator.
 /// Owns the server connection, platform service router, and local binary manager.
 @Observable
@@ -19,6 +26,7 @@ final class AppState {
     let connection = ServerConnection()
     let platformRouter = PlatformServiceRouter()
     let binaryManager = BinaryManager()
+    let localNotificationManager = LocalThaneNotificationManager()
     let updateManager = UpdateManager()
     let appUpdateManager = AppUpdateManager()
     let permissionsManager = PermissionsManager()
@@ -38,6 +46,7 @@ final class AppState {
     private(set) var calendarAuthorization: EventKitAuthorizationState = .notDetermined
     private(set) var contactsAuthorization: ContactsAuthorizationState = .notDetermined
     private(set) var remindersAuthorization: EventKitAuthorizationState = .notDetermined
+    var selectedSettingsTab: AppSettingsTab = .general
 
 
     var connectionState: ServerConnection.State {
@@ -59,9 +68,12 @@ final class AppState {
     }
 
     var menuBarSymbol: String {
-        switch connection.state {
-        case .connected: "brain.head.profile"
-        case .connecting, .authenticating, .reconnecting: "brain.head.profile.fill"
+        if case .needsAttention = binaryManager.state {
+            return "exclamationmark.shield"
+        }
+        return switch connection.state {
+        case .connected: "brain.head.profile.fill"
+        case .connecting, .authenticating, .reconnecting: "ellipsis.circle"
         case .disconnected: "brain.head.profile"
         }
     }
@@ -79,9 +91,11 @@ final class AppState {
     }
 
     /// Called by MainView on appear to bridge SwiftUI's openWindow action to AppKit contexts.
+    var openMainWindow: (() -> Void)?
     var openConsoleWindow: (() -> Void)?
     var openDashboardWindow: (() -> Void)?
     var openServerWindow: (() -> Void)?
+    private var shouldOpenProcessHealth = false
 
     /// Base URL of the currently active server — local takes priority over remote.
     /// Used by the dashboard window to load the web UI.
@@ -140,17 +154,22 @@ final class AppState {
             case .running:
                 // Only auto-connect locally if not already connected to a remote server
                 if !self.isConnected { self.connectLocal() }
-            case .stopped, .crashed, .notConfigured:
+            case .stopped, .crashed, .needsAttention, .notConfigured:
                 if self.isLocallyConnected { self.disconnect() }
             default:
                 break
             }
         }
 
+        binaryManager.onLogEntry = { [weak self] entry in
+            self?.localNotificationManager.handle(entry)
+        }
+
         Task {
             await refreshCalendarAuthorization()
             await refreshContactsAuthorization()
             await refreshRemindersAuthorization()
+            await localNotificationManager.refreshAuthorization()
         }
 
         binaryManager.autoStartIfNeeded()
@@ -164,6 +183,21 @@ final class AppState {
         appUpdateManager.startPeriodicChecks {
             AppVersion.current
         }
+    }
+
+    func showProcessHealth() {
+        if let openConsoleWindow {
+            openConsoleWindow()
+        } else {
+            shouldOpenProcessHealth = true
+        }
+    }
+
+    func registerProcessHealthWindowOpener(_ opener: @escaping () -> Void) {
+        openConsoleWindow = opener
+        guard shouldOpenProcessHealth else { return }
+        shouldOpenProcessHealth = false
+        opener()
     }
 
     var updateAvailable: Bool {

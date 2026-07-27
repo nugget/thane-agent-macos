@@ -103,9 +103,10 @@ Silicon.
 - **Platform services** — `PlatformServiceRouter.swift` dispatches
   requests to registered providers; `CalendarService` and
   `ContactsService` ship today
-- **Local server** — `BinaryManager.swift` (thane process lifecycle,
-  code-signature inspection), `UpdateManager.swift` (binary updates
-  from thane-ai-agent releases)
+- **Local server** — `BinaryManager.swift` (signed-core preflight, thane
+  process lifecycle, terminal exit handling, code-signature inspection),
+  `ThaneValidation.swift` (shared `validate -o json` contract and process
+  runner), `UpdateManager.swift` (binary updates from thane-ai-agent releases)
 - **Models** — SwiftData: `ServerConfig`, `Conversation`, `ChatMessage`.
   Store is bundle-scoped at
   `~/Library/Application Support/<bundle-id>/Data.store`
@@ -154,6 +155,10 @@ Silicon.
   parsed from `THANE_CODESIGN_IDENTITY` at export time.
 - **macOS Local Network Privacy**: launchd-launched binaries need
   explicit Local Network permission to reach LAN hosts.
+- **Signed runtime config**: Managed launches select an instance with
+  `-workspace` and load only `<workspace>/core/config.yaml`. Run the
+  structured validation preflight before `serve`; exit 78 is terminal
+  operator-attention state and must never enter the restart backoff loop.
 
 ## Security
 
