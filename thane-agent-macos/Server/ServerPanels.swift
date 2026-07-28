@@ -57,6 +57,280 @@ struct SystemStatusPanel: View {
     }
 }
 
+// MARK: - Identity
+
+struct IdentityPanel: View {
+    @Environment(AppState.self) private var appState
+    @State private var confirmsNewIdentity = false
+    private var manager: IdentityManager { appState.identityManager }
+
+    var body: some View {
+        ServerPanelContainer(
+            title: "Identity",
+            isLoading: manager.isLoading && manager.evidence == nil,
+            error: manager.evidence == nil ? manager.lastError : nil,
+            retry: { await manager.refresh(appState.nativeClient) }
+        ) {
+            if let evidence = manager.evidence { content(evidence) }
+        }
+        .toolbar {
+            Button {
+                Task { await manager.refresh(appState.nativeClient) }
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .help("Refresh identity evidence")
+        }
+        .alert("Trust This Current Evidence?", isPresented: $confirmsNewIdentity) {
+            Button("Cancel", role: .cancel) {}
+            Button("Trust Current Evidence", role: .destructive) {
+                manager.acceptCurrentIdentity()
+            }
+        } message: {
+            Text("This replaces the identity and founding-history baseline saved on this Mac. Only continue after verifying the change through another trusted channel.")
+        }
+    }
+
+    private func content(_ evidence: IdentityEvidence) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                if let error = manager.lastError {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Identity monitoring needs attention")
+                                .font(.subheadline.weight(.semibold))
+                            Text(error)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("The last successfully observed evidence remains visible below.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(14)
+                    .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(.orange.opacity(0.3))
+                    }
+                }
+
+                identityPinSection
+                identityHeader(evidence)
+                verificationSection(evidence)
+                coreSection(evidence)
+                publicMaterialSection(evidence)
+
+                Text("This is locally verified evidence reported by Thane, not a remote trust verdict.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(16)
+        }
+    }
+
+    @ViewBuilder private var identityPinSection: some View {
+        switch manager.pinState {
+        case .unavailable:
+            EmptyView()
+        case .matches(let stored, let firstObservation):
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "checkmark.shield.fill")
+                    .foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(firstObservation ? "Identity saved on this Mac" : "Identity matches this Mac’s saved record")
+                        .font(.subheadline.weight(.medium))
+                    Text("First seen \(stored.firstSeenAt.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("First core: \(stored.firstSeenCommitAlgorithm):\(stored.firstSeenCommitOID)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                Spacer()
+            }
+            .padding(14)
+            .background(.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        case .changed(_, _, let changes):
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Thane’s identity or founding history changed", systemImage: "exclamationmark.shield.fill")
+                    .font(.headline)
+                    .foregroundStyle(.red)
+
+                Text("The server no longer matches the identity previously saved for this address. This can indicate replacement, restored or rewritten history, or an unexpected connection target.")
+                    .font(.callout)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(changes) { change in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(change.field).font(.caption.weight(.semibold))
+                            Text("Was: \(change.previous)")
+                            Text("Now: \(change.current)")
+                        }
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    }
+                }
+
+                HStack {
+                    Button("Trust Current Evidence…", role: .destructive) {
+                        confirmsNewIdentity = true
+                    }
+                    Spacer()
+                }
+                .controlSize(.small)
+            }
+            .padding(14)
+            .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10).stroke(.red.opacity(0.3))
+            }
+        }
+    }
+
+    private func identityHeader(_ evidence: IdentityEvidence) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: evidenceIsVerified(evidence) ? "checkmark.shield.fill" : "exclamationmark.shield.fill")
+                .font(.system(size: 24))
+                .foregroundStyle(evidenceIsVerified(evidence) ? Color.green : Color.orange)
+                .frame(width: 42, height: 42)
+                .background(
+                    (evidenceIsVerified(evidence) ? Color.green : Color.orange).opacity(0.12),
+                    in: Circle()
+                )
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(evidence.instance.name)
+                    .font(.title2.weight(.semibold))
+                Text(evidence.instance.id)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                Text(evidenceIsVerified(evidence) ? "Local evidence checks passed" : "Local evidence needs attention")
+                    .font(.callout)
+                    .foregroundStyle(evidenceIsVerified(evidence) ? .green : .orange)
+            }
+            Spacer()
+        }
+    }
+
+    private func verificationSection(_ evidence: IdentityEvidence) -> some View {
+        GroupBox("Verification Evidence") {
+            VStack(alignment: .leading, spacing: 10) {
+                verificationRow("Birth Admission", evidence.core.verification.admission)
+                Divider()
+                verificationRow("Active Core", evidence.core.verification.head)
+                if !evidence.core.head.worktreeClean {
+                    Divider()
+                    Label("Tracked core content differs from HEAD.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    private func verificationRow(_ title: String, _ check: IdentityVerificationCheck) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: check.isVerified ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundStyle(check.isVerified ? .green : .red)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.subheadline.weight(.medium))
+                Text(check.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            Spacer()
+        }
+    }
+
+    private func coreSection(_ evidence: IdentityEvidence) -> some View {
+        GroupBox("Core Provenance") {
+            VStack(alignment: .leading, spacing: 10) {
+                evidenceRow("Founding posture", anchorLabel(evidence.core.birth.anchor))
+                Divider()
+                objectRow("Birth commit", evidence.core.birth.commit)
+                evidenceRow(
+                    "Asserted birth",
+                    "\(ServerFormat.relative(evidence.core.birth.assertedAt)) · signed claim"
+                )
+                Divider()
+                objectRow("Current commit", evidence.core.currentCommit)
+                evidenceRow("Worktree", evidence.core.head.worktreeClean ? "Clean" : "Modified")
+                evidenceRow("Trust-file revisions", "\(evidence.core.head.trustFileChangeCount)")
+                Divider()
+                evidenceRow("Observed", ServerFormat.relative(evidence.observedAt))
+                evidenceRow("Evidence schema", "\(evidence.schemaVersion)")
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    private func publicMaterialSection(_ evidence: IdentityEvidence) -> some View {
+        GroupBox("Founding Public Material") {
+            VStack(alignment: .leading, spacing: 10) {
+                materialRow("Identity key", evidence.instance.identityKey)
+                Divider()
+                materialRow("Channel CA", evidence.instance.channelCA)
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    private func materialRow(_ title: String, _ material: PublicIdentityMaterial) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack {
+                Text(title).font(.subheadline.weight(.medium))
+                Spacer()
+                Text(material.algorithm).font(.caption.monospaced()).foregroundStyle(.secondary)
+            }
+            Text(material.fingerprint)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+    }
+
+    private func objectRow(_ title: String, _ object: GitObjectID) -> some View {
+        evidenceRow(title, "\(object.algorithm):\(object.oid)")
+    }
+
+    private func evidenceRow(_ title: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title).font(.subheadline)
+            Spacer()
+            Text(value)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func evidenceIsVerified(_ evidence: IdentityEvidence) -> Bool {
+        evidence.core.verification.admission.isVerified
+            && evidence.core.verification.head.isVerified
+            && evidence.core.head.worktreeClean
+    }
+
+    private func anchorLabel(_ anchor: String) -> String {
+        switch anchor {
+        case "operator": "Operator anchored"
+        case "self_signed": "Self-signed"
+        case "unknown": "Unknown"
+        default: anchor.replacingOccurrences(of: "_", with: " ").capitalized
+        }
+    }
+}
+
 // MARK: - Sessions
 
 struct SessionsPanel: View {

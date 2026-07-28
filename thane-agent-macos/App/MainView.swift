@@ -29,6 +29,25 @@ struct MainView: View {
             }
         }
         .frame(minWidth: 820, minHeight: 560)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if appState.identityManager.pinState.hasChanged {
+                HStack(spacing: 10) {
+                    Image(systemName: "exclamationmark.shield.fill")
+                        .foregroundStyle(.red)
+                    Text("Thane’s identity or founding history changed.")
+                        .font(.callout.weight(.semibold))
+                    Spacer()
+                    Button("Review…") {
+                        openWindow(id: "identity")
+                    }
+                    .controlSize(.small)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(.red.opacity(0.1))
+                .overlay(alignment: .bottom) { Divider() }
+            }
+        }
         .onAppear {
             migrateLegacyConfigurationIfNeeded()
             appState.openMainWindow = { openWindow(id: "main") }

@@ -74,6 +74,13 @@ struct ThaneApp: App {
         .defaultSize(width: 1024, height: 768)
         .windowResizability(.contentMinSize)
 
+        Window("Thane Identity", id: "identity") {
+            IdentityPanel()
+                .environment(appState)
+        }
+        .defaultSize(width: 680, height: 720)
+        .windowResizability(.contentMinSize)
+
         Window("About Thane", id: "about") {
             AboutView()
                 .environment(appState)
@@ -98,6 +105,11 @@ private struct ThaneCommands: Commands {
         }
 
         CommandMenu("Thane") {
+            Button("Identity…") {
+                openWindow(id: "identity")
+            }
+            .keyboardShortcut("1", modifiers: .command)
+
             Button("Web Dashboard") {
                 openWindow(id: "dashboard")
             }

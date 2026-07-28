@@ -36,6 +36,56 @@ struct NativeAPITypesTests {
         #expect(health.lastError == nil)
     }
 
+    @Test func decodesIdentityEvidence() throws {
+        let evidence = try Self.decode(IdentityEvidence.self, """
+        {
+          "schema_version": 1,
+          "observed_at": "2026-07-28T15:00:00Z",
+          "instance": {
+            "id": "thane:ed25519:SHA256:identity",
+            "name": "centro",
+            "identity_key": {
+              "algorithm": "ed25519",
+              "fingerprint": "SHA256:identity"
+            },
+            "channel_ca": {
+              "algorithm": "x509-ed25519",
+              "fingerprint": "SHA256:channel"
+            }
+          },
+          "core": {
+            "birth": {
+              "commit": { "algorithm": "sha1", "oid": "1111111111111111111111111111111111111111" },
+              "asserted_at": "2026-01-01T00:00:00Z",
+              "time_assurance": "signed_claim",
+              "anchor": "operator"
+            },
+            "current_commit": {
+              "algorithm": "sha1",
+              "oid": "2222222222222222222222222222222222222222"
+            },
+            "head": {
+              "worktree_clean": true,
+              "trust_file_change_count": 2
+            },
+            "verification": {
+              "admission": { "status": "verified", "detail": "birth is admitted" },
+              "head": { "status": "failed", "detail": "HEAD is not covered" }
+            }
+          }
+        }
+        """)
+
+        #expect(evidence.schemaVersion == 1)
+        #expect(evidence.instance.name == "centro")
+        #expect(evidence.instance.identityKey.algorithm == "ed25519")
+        #expect(evidence.core.birth.anchor == "operator")
+        #expect(evidence.core.currentCommit.oid.hasPrefix("2222"))
+        #expect(evidence.core.head.trustFileChangeCount == 2)
+        #expect(evidence.core.verification.admission.isVerified)
+        #expect(!evidence.core.verification.head.isVerified)
+    }
+
     @Test func decodesSessionStatsWithAllOptionals() throws {
         let stats = try Self.decode(SessionStats.self, """
         {

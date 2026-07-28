@@ -119,6 +119,7 @@ final class AppState {
 
     // Native REST API panel managers — each polls only while its panel is visible.
     let systemStatusManager = SystemStatusManager()
+    let identityManager = IdentityManager()
     let sessionsManager = SessionsManager()
     let loopsManager = LoopsManager()
     let conversationsManager = ConversationsManager()
@@ -180,6 +181,9 @@ final class AppState {
     }
 
     var menuBarSymbol: String {
+        if identityManager.pinState.hasChanged {
+            return "exclamationmark.shield.fill"
+        }
         if configurationMode == .managed {
             switch binaryManager.state {
             case .needsAttention:
@@ -426,6 +430,7 @@ final class AppState {
         isLocallyConnected = false
         activeServerURL = url
         activeServer = ActiveServer(baseURL: url, token: token, isLocal: false)
+        identityManager.start { [weak self] in self?.nativeClient }
 
         connection.connect(
             url: url,
@@ -440,6 +445,7 @@ final class AppState {
         isLocallyConnected = false
         activeServerURL = nil
         activeServer = nil
+        identityManager.stop()
         connection.disconnect()
     }
 
@@ -459,6 +465,7 @@ final class AppState {
         isLocallyConnected = true
         activeServerURL = url
         activeServer = ActiveServer(baseURL: url, token: token, isLocal: true)
+        identityManager.start { [weak self] in self?.nativeClient }
         connection.connect(url: url, token: token, clientID: localClientID, clientName: clientName, persist: true)
     }
 
