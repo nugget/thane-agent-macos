@@ -94,6 +94,30 @@ struct IdentityPanel: View {
     private func content(_ evidence: IdentityEvidence) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                if let error = manager.lastError {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Identity monitoring needs attention")
+                                .font(.subheadline.weight(.semibold))
+                            Text(error)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("The last successfully observed evidence remains visible below.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(14)
+                    .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(.orange.opacity(0.3))
+                    }
+                }
+
                 identityPinSection
                 identityHeader(evidence)
                 verificationSection(evidence)
