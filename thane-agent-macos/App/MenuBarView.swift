@@ -17,6 +17,18 @@ struct MenuBarView: View {
 
         Label(appState.statusText, systemImage: appState.menuBarSymbol)
 
+        if appState.activeServer != nil {
+            Button(
+                appState.identityManager.pinState.hasChanged ? "Identity Changed…" : "Identity…",
+                systemImage: appState.identityManager.pinState.hasChanged
+                    ? "exclamationmark.shield.fill"
+                    : "person.text.rectangle"
+            ) {
+                activate()
+                openWindow(id: "identity")
+            }
+        }
+
         if appState.managedRuntimeIsRelevant {
             Button(managedStatusTitle, systemImage: managedStatusIcon) {
                 activate()

@@ -52,28 +52,100 @@ final class SystemStatusManager {
 @Observable @MainActor
 final class IdentityManager {
     private(set) var evidence: IdentityEvidence?
+    private(set) var pinState: IdentityPinState = .unavailable
     private(set) var lastError: String?
     private(set) var isLoading = false
     private var pollTask: Task<Void, Never>?
+    private var activeClient: NativeAPIClient?
+    private let pinStore = IdentityPinStore()
 
     func start(client: @escaping @MainActor () -> NativeAPIClient?) {
         stop()
-        pollTask = pollLoop(every: 10) { [weak self] in await self?.refresh(client()) }
+        evidence = nil
+        pinState = .unavailable
+        pollTask = pollLoop(every: 300) { [weak self] in
+            guard let self else { return }
+            let api = client()
+            self.activeClient = api
+            await self.refresh(api)
+        }
     }
 
-    func stop() { pollTask?.cancel(); pollTask = nil }
+    func stop() {
+        pollTask?.cancel()
+        pollTask = nil
+        activeClient = nil
+    }
 
     func refresh(_ client: NativeAPIClient?) async {
         guard let client else { return }
+        activeClient = client
         if evidence == nil { isLoading = true }
         do {
-            evidence = try await client.get("v1/identity")
+            let newEvidence: IdentityEvidence = try await client.get("v1/identity")
+            evidence = newEvidence
+            try evaluatePin(newEvidence, for: client.baseURL)
             lastError = nil
         } catch {
             serverLog.error("identity refresh failed: \(error.localizedDescription, privacy: .public)")
             lastError = error.localizedDescription
         }
         isLoading = false
+    }
+
+    func acceptCurrentIdentity() {
+        guard let client = activeClient, let evidence else { return }
+        let stored = storedPin(from: evidence)
+        do {
+            try pinStore.save(stored, for: client.baseURL)
+            pinState = .matches(stored, firstObservation: false)
+        } catch {
+            serverLog.error("identity pin save failed: \(error.localizedDescription, privacy: .public)")
+            lastError = "Could not save the new identity on this Mac"
+        }
+    }
+
+    private func evaluatePin(_ evidence: IdentityEvidence, for baseURL: URL) throws {
+        let current = FoundingIdentityPin(evidence: evidence)
+        if let previous = try pinStore.load(for: baseURL) {
+            let changes = previous.changes(
+                to: current,
+                trustFileChangeCount: evidence.core.head.trustFileChangeCount
+            )
+            if changes.isEmpty {
+                let updated = StoredIdentityPin(
+                    pin: previous.pin,
+                    firstSeenAt: previous.firstSeenAt,
+                    firstSeenCommitAlgorithm: previous.firstSeenCommitAlgorithm,
+                    firstSeenCommitOID: previous.firstSeenCommitOID,
+                    highestTrustFileChangeCount: max(
+                        previous.highestTrustFileChangeCount,
+                        evidence.core.head.trustFileChangeCount
+                    )
+                )
+                if updated != previous {
+                    try pinStore.save(updated, for: baseURL)
+                }
+                pinState = .matches(updated, firstObservation: false)
+            } else {
+                pinState = .changed(previous: previous, current: current, changes: changes)
+            }
+            return
+        }
+
+        let stored = storedPin(from: evidence)
+        try pinStore.save(stored, for: baseURL)
+        pinState = .matches(stored, firstObservation: true)
+    }
+
+    private func storedPin(from evidence: IdentityEvidence) -> StoredIdentityPin {
+        StoredIdentityPin(
+            pin: FoundingIdentityPin(evidence: evidence),
+            firstSeenAt: Date(),
+            firstSeenCommitAlgorithm: evidence.core.currentCommit.algorithm,
+            firstSeenCommitOID: evidence.core.currentCommit.oid,
+            highestTrustFileChangeCount: evidence.core.head.trustFileChangeCount
+        )
     }
 }
 

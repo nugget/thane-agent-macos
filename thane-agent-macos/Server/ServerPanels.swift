@@ -61,6 +61,7 @@ struct SystemStatusPanel: View {
 
 struct IdentityPanel: View {
     @Environment(AppState.self) private var appState
+    @State private var confirmsNewIdentity = false
     private var manager: IdentityManager { appState.identityManager }
 
     var body: some View {
@@ -72,8 +73,6 @@ struct IdentityPanel: View {
         ) {
             if let evidence = manager.evidence { content(evidence) }
         }
-        .task { manager.start { appState.nativeClient } }
-        .onDisappear { manager.stop() }
         .toolbar {
             Button {
                 Task { await manager.refresh(appState.nativeClient) }
@@ -82,11 +81,20 @@ struct IdentityPanel: View {
             }
             .help("Refresh identity evidence")
         }
+        .alert("Trust This Current Evidence?", isPresented: $confirmsNewIdentity) {
+            Button("Cancel", role: .cancel) {}
+            Button("Trust Current Evidence", role: .destructive) {
+                manager.acceptCurrentIdentity()
+            }
+        } message: {
+            Text("This replaces the identity and founding-history baseline saved on this Mac. Only continue after verifying the change through another trusted channel.")
+        }
     }
 
     private func content(_ evidence: IdentityEvidence) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
+                identityPinSection
                 identityHeader(evidence)
                 verificationSection(evidence)
                 coreSection(evidence)
@@ -97,6 +105,67 @@ struct IdentityPanel: View {
                     .foregroundStyle(.secondary)
             }
             .padding(16)
+        }
+    }
+
+    @ViewBuilder private var identityPinSection: some View {
+        switch manager.pinState {
+        case .unavailable:
+            EmptyView()
+        case .matches(let stored, let firstObservation):
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "checkmark.shield.fill")
+                    .foregroundStyle(.green)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(firstObservation ? "Identity saved on this Mac" : "Identity matches this Mac’s saved record")
+                        .font(.subheadline.weight(.medium))
+                    Text("First seen \(stored.firstSeenAt.formatted(date: .abbreviated, time: .shortened))")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("First core: \(stored.firstSeenCommitAlgorithm):\(stored.firstSeenCommitOID)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                Spacer()
+            }
+            .padding(14)
+            .background(.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+        case .changed(_, _, let changes):
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Thane’s identity or founding history changed", systemImage: "exclamationmark.shield.fill")
+                    .font(.headline)
+                    .foregroundStyle(.red)
+
+                Text("The server no longer matches the identity previously saved for this address. This can indicate replacement, restored or rewritten history, or an unexpected connection target.")
+                    .font(.callout)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(changes) { change in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(change.field).font(.caption.weight(.semibold))
+                            Text("Was: \(change.previous)")
+                            Text("Now: \(change.current)")
+                        }
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    }
+                }
+
+                HStack {
+                    Button("Trust Current Evidence…", role: .destructive) {
+                        confirmsNewIdentity = true
+                    }
+                    Spacer()
+                }
+                .controlSize(.small)
+            }
+            .padding(14)
+            .background(.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10).stroke(.red.opacity(0.3))
+            }
         }
     }
 
