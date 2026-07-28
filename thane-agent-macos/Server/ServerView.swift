@@ -34,6 +34,7 @@ struct ServerView: View {
     @ViewBuilder private var detail: some View {
         switch section ?? .system {
         case .system: SystemStatusPanel()
+        case .identity: IdentityPanel()
         case .sessions: SessionsPanel()
         case .loops: LoopsPanel()
         case .conversations: ConversationsPanel()
@@ -44,13 +45,14 @@ struct ServerView: View {
 }
 
 enum ServerSection: String, CaseIterable, Identifiable {
-    case system, sessions, loops, conversations, schedules, logs
+    case system, identity, sessions, loops, conversations, schedules, logs
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
         case .system: "System"
+        case .identity: "Identity"
         case .sessions: "Sessions"
         case .loops: "Loops"
         case .conversations: "Conversations"
@@ -62,6 +64,7 @@ enum ServerSection: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .system: "server.rack"
+        case .identity: "person.text.rectangle"
         case .sessions: "gauge.with.dots.needle.67percent"
         case .loops: "arrow.triangle.2.circlepath"
         case .conversations: "bubble.left.and.bubble.right"

@@ -57,6 +57,96 @@ nonisolated struct LogEntry: Decodable, Sendable, Identifiable {
     }
 }
 
+// MARK: - Identity
+
+/// Core-backed identity evidence reported by `/v1/identity`.
+///
+/// This is evidence for an operator to evaluate, not a server-issued trust
+/// verdict. The stable instance identifier and public fingerprints are derived
+/// from material committed in core's signed birth commit.
+nonisolated struct IdentityEvidence: Decodable, Sendable {
+    let schemaVersion: Int
+    let observedAt: String
+    let instance: InstanceIdentityEvidence
+    let core: CoreIdentityEvidence
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion = "schema_version"
+        case observedAt = "observed_at"
+        case instance, core
+    }
+}
+
+nonisolated struct InstanceIdentityEvidence: Decodable, Sendable {
+    let id: String
+    let name: String
+    let identityKey: PublicIdentityMaterial
+    let channelCA: PublicIdentityMaterial
+
+    enum CodingKeys: String, CodingKey {
+        case id, name
+        case identityKey = "identity_key"
+        case channelCA = "channel_ca"
+    }
+}
+
+nonisolated struct PublicIdentityMaterial: Decodable, Sendable {
+    let algorithm: String
+    let fingerprint: String
+}
+
+nonisolated struct CoreIdentityEvidence: Decodable, Sendable {
+    let birth: CoreBirthEvidence
+    let currentCommit: GitObjectID
+    let head: CoreHeadEvidence
+    let verification: CoreVerificationEvidence
+
+    enum CodingKeys: String, CodingKey {
+        case birth, head, verification
+        case currentCommit = "current_commit"
+    }
+}
+
+nonisolated struct GitObjectID: Decodable, Sendable {
+    let algorithm: String
+    let oid: String
+}
+
+nonisolated struct CoreBirthEvidence: Decodable, Sendable {
+    let commit: GitObjectID
+    let assertedAt: String
+    let timeAssurance: String
+    let anchor: String
+
+    enum CodingKeys: String, CodingKey {
+        case commit, anchor
+        case assertedAt = "asserted_at"
+        case timeAssurance = "time_assurance"
+    }
+}
+
+nonisolated struct CoreHeadEvidence: Decodable, Sendable {
+    let worktreeClean: Bool
+    let trustFileChangeCount: Int
+
+    enum CodingKeys: String, CodingKey {
+        case worktreeClean = "worktree_clean"
+        case trustFileChangeCount = "trust_file_change_count"
+    }
+}
+
+nonisolated struct CoreVerificationEvidence: Decodable, Sendable {
+    let admission: IdentityVerificationCheck
+    let head: IdentityVerificationCheck
+}
+
+nonisolated struct IdentityVerificationCheck: Decodable, Sendable {
+    let status: String
+    let detail: String
+
+    var isVerified: Bool { status == "verified" }
+}
+
 // MARK: - Sessions
 
 nonisolated struct SessionStats: Decodable, Sendable {

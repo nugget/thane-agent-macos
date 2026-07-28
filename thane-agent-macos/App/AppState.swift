@@ -119,6 +119,7 @@ final class AppState {
 
     // Native REST API panel managers — each polls only while its panel is visible.
     let systemStatusManager = SystemStatusManager()
+    let identityManager = IdentityManager()
     let sessionsManager = SessionsManager()
     let loopsManager = LoopsManager()
     let conversationsManager = ConversationsManager()

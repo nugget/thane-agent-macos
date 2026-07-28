@@ -50,6 +50,34 @@ final class SystemStatusManager {
 }
 
 @Observable @MainActor
+final class IdentityManager {
+    private(set) var evidence: IdentityEvidence?
+    private(set) var lastError: String?
+    private(set) var isLoading = false
+    private var pollTask: Task<Void, Never>?
+
+    func start(client: @escaping @MainActor () -> NativeAPIClient?) {
+        stop()
+        pollTask = pollLoop(every: 10) { [weak self] in await self?.refresh(client()) }
+    }
+
+    func stop() { pollTask?.cancel(); pollTask = nil }
+
+    func refresh(_ client: NativeAPIClient?) async {
+        guard let client else { return }
+        if evidence == nil { isLoading = true }
+        do {
+            evidence = try await client.get("v1/identity")
+            lastError = nil
+        } catch {
+            serverLog.error("identity refresh failed: \(error.localizedDescription, privacy: .public)")
+            lastError = error.localizedDescription
+        }
+        isLoading = false
+    }
+}
+
+@Observable @MainActor
 final class SessionsManager {
     private(set) var stats: SessionStats?
     private(set) var lastError: String?
