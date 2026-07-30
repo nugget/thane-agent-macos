@@ -189,6 +189,8 @@ enum SystemContextServiceError: PlatformServiceError, Sendable {
 
 @MainActor
 final class SystemContextService {
+    private static let timestampFormatter = ISO8601DateFormatter()
+
     private let preferences: SystemContextPreferences
 
     init(preferences: SystemContextPreferences) {
@@ -202,7 +204,7 @@ final class SystemContextService {
         }
 
         return SystemContextSnapshot(
-            capturedAt: ISO8601DateFormatter().string(from: Date()),
+            capturedAt: Self.timestampFormatter.string(from: Date()),
             application: enabled.contains(.application) ? applicationContext() : nil,
             activity: enabled.contains(.activity) ? activityContext() : nil,
             power: enabled.contains(.power) ? Self.powerContext() : nil,

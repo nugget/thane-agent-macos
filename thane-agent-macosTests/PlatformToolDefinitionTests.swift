@@ -12,7 +12,11 @@ struct PlatformToolDefinitionTests {
 
     @Test
     @MainActor
-    func authoredToolsAreWellFormed() {
+    func authoredToolsAreWellFormed() throws {
+        let suiteName = "PlatformToolDefinitionTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
         let handlers: [(String, PlatformServiceHandler)] = [
             ("macos.contacts", ContactsPlatformHandler(contactsService: ContactsService())),
             ("macos.calendar", CalendarPlatformHandler(calendarService: CalendarService())),
@@ -22,7 +26,7 @@ struct PlatformToolDefinitionTests {
                 SystemContextPlatformHandler(
                     service: SystemContextService(
                         preferences: SystemContextPreferences(
-                            defaults: UserDefaults(suiteName: "PlatformToolDefinitionTests")!
+                            defaults: defaults
                         )
                     )
                 )
