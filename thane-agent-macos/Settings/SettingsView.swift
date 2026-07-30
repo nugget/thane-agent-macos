@@ -15,12 +15,15 @@ struct SettingsView: View {
             Tab("Thane", systemImage: "brain.head.profile", value: .agent) {
                 AgentSettingsView()
             }
-            Tab("Permissions", systemImage: "lock.shield", value: .permissions) {
-                PermissionsSettingsView()
+            Tab("Capabilities", systemImage: "switch.2", value: .capabilities) {
+                CapabilitiesSettingsView()
+            }
+            Tab("File Access", systemImage: "folder.badge.gearshape", value: .access) {
+                FileAccessSettingsView()
             }
         }
-        .frame(width: 620)
-        .frame(minHeight: 520)
+        .frame(width: 680)
+        .frame(minHeight: 560)
     }
 }
 
@@ -628,79 +631,49 @@ struct LocalServerSettingsView: View {
     }
 }
 
-// MARK: - Permissions Tab
+// MARK: - Capabilities Tab
 
-struct PermissionsSettingsView: View {
+struct CapabilitiesSettingsView: View {
     @Environment(AppState.self) private var appState
-
-    private var manager: PermissionsManager { appState.permissionsManager }
 
     var body: some View {
         Form {
+            Section {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label("Shared only with your connected Thane", systemImage: "lock.shield.fill")
+                        .font(.headline)
+                    Text("System context is read on demand over the authenticated platform connection. It is not published as Home Assistant entities or retained by this app.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(systemContextSummary)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(
+                            appState.systemContextPreferences.hasEnabledCategories
+                                ? .green
+                                : .secondary
+                        )
+                }
+                .padding(.vertical, 4)
+
+                ForEach(SystemContextCategory.allCases) { category in
+                    systemContextRow(category)
+                }
+            } header: {
+                Text("System Context")
+            } footer: {
+                Text("These signals use macOS system APIs and do not require an Apple privacy prompt. All categories are off until you choose to share them.")
+            }
+
             Section {
                 calendarRow
                 remindersRow
                 contactsRow
             } header: {
-                Text("Private Data")
+                Text("Apple Data")
             } footer: {
                 Text("These grants power the macOS platform tools exposed back to a connected Thane server.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-
-            // Full Disk Access — requires manual action in System Settings
-            Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.yellow)
-                        Text("Full Disk Access")
-                            .font(.headline)
-                    }
-                    Text("Grants thane unrestricted read access to all files, including areas outside your home folder. Must be approved manually in System Settings — it cannot be requested via a dialog.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    HStack {
-                        Spacer()
-                        Button("Open System Settings…") {
-                            NSWorkspace.shared.open(
-                                URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
-                            )
-                        }
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-
-            // Per-category rows
-            Section {
-                ForEach(manager.categories) { category in
-                    categoryRow(category)
-                }
-            } header: {
-                Text("File Locations")
-            } footer: {
-                Text("These locations are accessed by the thane process. Request access upfront to avoid unexpected permission dialogs during unattended server operation.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            // Custom locations
-            Section {
-                HStack {
-                    Spacer()
-                    Button("Add Location…") {
-                        let panel = NSOpenPanel()
-                        panel.canChooseFiles = false
-                        panel.canChooseDirectories = true
-                        panel.allowsMultipleSelection = false
-                        panel.message = "Choose a directory for thane to access"
-                        if panel.runModal() == .OK, let url = panel.url {
-                            manager.addCustomLocation(url)
-                        }
-                    }
-                }
             }
         }
         .formStyle(.grouped)
@@ -710,9 +683,32 @@ struct PermissionsSettingsView: View {
                 await appState.refreshCalendarAuthorization()
                 await appState.refreshContactsAuthorization()
                 await appState.refreshRemindersAuthorization()
-                await manager.refreshPreviouslyRequested()
             }
         }
+    }
+
+    private var systemContextSummary: String {
+        let count = appState.systemContextPreferences.enabledCategories.count
+        return count == 0
+            ? "Nothing is currently shared."
+            : "\(count) of \(SystemContextCategory.allCases.count) categories enabled."
+    }
+
+    private func systemContextRow(_ category: SystemContextCategory) -> some View {
+        Toggle(
+            isOn: Binding(
+                get: { appState.systemContextPreferences.bindingValue(for: category) },
+                set: { appState.systemContextPreferences.setEnabled($0, for: category) }
+            )
+        ) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(category.title)
+                Text(category.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 3)
     }
 
     private var calendarRow: some View {
@@ -780,80 +776,6 @@ struct PermissionsSettingsView: View {
             }
         }
         .padding(.vertical, 4)
-    }
-
-    @ViewBuilder
-    private func categoryRow(_ category: PermissionsManager.Category) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(category.name)
-                Text(category.description)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: 6) {
-                statusBadge(category.status)
-                HStack(spacing: 6) {
-                    if category.isCustom {
-                        Button("Remove") {
-                            manager.removeCustomLocation(categoryID: category.id)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .foregroundStyle(.red)
-                    }
-                    actionButton(category)
-                }
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    @ViewBuilder
-    private func statusBadge(_ status: PermissionsManager.Status) -> some View {
-        switch status {
-        case .notRequested:
-            Text("Not Requested")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-        case .granted:
-            Label("Granted", systemImage: "checkmark.circle.fill")
-                .font(.caption)
-                .foregroundStyle(.green)
-        case .denied:
-            Label("Denied", systemImage: "xmark.circle.fill")
-                .font(.caption)
-                .foregroundStyle(.red)
-        }
-    }
-
-    @ViewBuilder
-    private func actionButton(_ category: PermissionsManager.Category) -> some View {
-        switch category.status {
-        case .notRequested:
-            Button("Request Access") {
-                Task { await manager.requestAccess(categoryID: category.id) }
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-        case .granted:
-            Button("Re-check") {
-                Task { await manager.requestAccess(categoryID: category.id) }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        case .denied:
-            Button("Open Settings…") {
-                NSWorkspace.shared.open(
-                    URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!
-                )
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
     }
 
     @ViewBuilder
@@ -946,6 +868,148 @@ struct PermissionsSettingsView: View {
             Button("Open Settings…") {
                 NSWorkspace.shared.open(
                     URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Contacts")!
+                )
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+    }
+}
+
+// MARK: - File Access Tab
+
+struct FileAccessSettingsView: View {
+    @Environment(AppState.self) private var appState
+
+    private var manager: PermissionsManager { appState.permissionsManager }
+
+    var body: some View {
+        Form {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label("Full Disk Access", systemImage: "exclamationmark.triangle.fill")
+                        .font(.headline)
+                        .foregroundStyle(.orange)
+                    Text("Grants the managed Thane process unrestricted file access, including protected locations outside your home folder. macOS requires you to approve this manually.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HStack {
+                        Spacer()
+                        Button("Open System Settings…") {
+                            NSWorkspace.shared.open(
+                                URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")!
+                            )
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+            } header: {
+                Text("Broad Access")
+            } footer: {
+                Text("Full Disk Access applies to the local managed process. It does not control which macOS capabilities are shared over the Thane connection.")
+            }
+
+            Section {
+                ForEach(manager.categories) { category in
+                    categoryRow(category)
+                }
+            } header: {
+                Text("Approved Locations")
+            } footer: {
+                Text("Approve only the folders the managed Thane instance needs for unattended work.")
+            }
+
+            Section {
+                HStack {
+                    Spacer()
+                    Button("Add Location…") {
+                        let panel = NSOpenPanel()
+                        panel.canChooseFiles = false
+                        panel.canChooseDirectories = true
+                        panel.allowsMultipleSelection = false
+                        panel.message = "Choose a directory for Thane to access"
+                        if panel.runModal() == .OK, let url = panel.url {
+                            manager.addCustomLocation(url)
+                        }
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .onAppear {
+            Task {
+                await manager.refreshPreviouslyRequested()
+            }
+        }
+    }
+
+    private func categoryRow(_ category: PermissionsManager.Category) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(category.name)
+                Text(category.description)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            VStack(alignment: .trailing, spacing: 6) {
+                statusBadge(category.status)
+                HStack(spacing: 6) {
+                    if category.isCustom {
+                        Button("Remove") {
+                            manager.removeCustomLocation(categoryID: category.id)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .foregroundStyle(.red)
+                    }
+                    actionButton(category)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private func statusBadge(_ status: PermissionsManager.Status) -> some View {
+        switch status {
+        case .notRequested:
+            Text("Not Requested")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        case .granted:
+            Label("Granted", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .denied:
+            Label("Denied", systemImage: "xmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+    }
+
+    @ViewBuilder
+    private func actionButton(_ category: PermissionsManager.Category) -> some View {
+        switch category.status {
+        case .notRequested:
+            Button("Request Access") {
+                Task { await manager.requestAccess(categoryID: category.id) }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        case .granted:
+            Button("Re-check") {
+                Task { await manager.requestAccess(categoryID: category.id) }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        case .denied:
+            Button("Open Settings…") {
+                NSWorkspace.shared.open(
+                    URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!
                 )
             }
             .buttonStyle(.bordered)

@@ -17,6 +17,16 @@ struct PlatformToolDefinitionTests {
             ("macos.contacts", ContactsPlatformHandler(contactsService: ContactsService())),
             ("macos.calendar", CalendarPlatformHandler(calendarService: CalendarService())),
             ("macos.reminders", RemindersPlatformHandler(remindersService: RemindersService())),
+            (
+                "macos.system-context",
+                SystemContextPlatformHandler(
+                    service: SystemContextService(
+                        preferences: SystemContextPreferences(
+                            defaults: UserDefaults(suiteName: "PlatformToolDefinitionTests")!
+                        )
+                    )
+                )
+            ),
         ]
         for (capability, handler) in handlers {
             #expect(!handler.toolDefinitions.isEmpty, "\(capability) authors no tools")
