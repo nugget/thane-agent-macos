@@ -278,6 +278,14 @@ final class AppState {
         )
         connection.registeredCapabilities = platformRouter.capabilities
 
+        // Both EventKit-backed services hold their store for the life of the
+        // process. Without this they would keep answering from whatever the
+        // database looked like at launch.
+        Task { [calendarService, remindersService] in
+            await calendarService.startObservingChanges()
+            await remindersService.startObservingChanges()
+        }
+
         connection.onPlatformRequest = { [weak self] request in
             guard let self else {
                 return PlatformResponse(

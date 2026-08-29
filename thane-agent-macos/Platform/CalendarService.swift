@@ -266,9 +266,33 @@ nonisolated struct CalendarEventSummary: Codable, Equatable, Sendable {
 
 actor CalendarService {
     private let store: EKEventStore
+    private var changeObserver: EventKitChangeObserver?
 
     init(store: EKEventStore = EKEventStore()) {
         self.store = store
+    }
+
+    /// Starts refreshing this service's store whenever EventKit reports a
+    /// change made outside this process. Idempotent.
+    ///
+    /// Explicitly started rather than wired up in `init` so constructing a
+    /// service — which tests do freely — never registers a process-wide
+    /// observer as a side effect.
+    func startObservingChanges() async {
+        guard changeObserver == nil else {
+            return
+        }
+        let observer = EventKitChangeObserver { [weak self] in
+            await self?.discardCachedState()
+        }
+        changeObserver = observer
+        await observer.start()
+    }
+
+    /// Drops everything the store has cached, so the next query reads the
+    /// database as it stands rather than as it stood at launch.
+    private func discardCachedState() {
+        store.reset()
     }
 
     func authorizationState() -> EventKitAuthorizationState {
