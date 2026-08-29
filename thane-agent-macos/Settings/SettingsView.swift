@@ -18,6 +18,9 @@ struct SettingsView: View {
             Tab("Capabilities", systemImage: "switch.2", value: .capabilities) {
                 CapabilitiesSettingsView()
             }
+            Tab("Calendar", systemImage: "calendar", value: .calendar) {
+                CalendarSettingsView()
+            }
             Tab("File Access", systemImage: "folder.badge.gearshape", value: .access) {
                 FileAccessSettingsView()
             }
@@ -631,6 +634,299 @@ struct LocalServerSettingsView: View {
     }
 }
 
+// MARK: - Calendar Tab
+
+struct CalendarSettingsView: View {
+    @Environment(AppState.self) private var appState
+
+    @State private var calendars: [CalendarMetadata] = []
+    @State private var isLoading = false
+    @State private var loadError: String?
+
+    private var preferences: CalendarSharingPreferences {
+        appState.calendarSharingPreferences
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(isOn: sharingEnabledBinding) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Share Calendar Data with Thane")
+                        Text("Master gate for every calendar tool and response.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+
+                Label(sharingSummary, systemImage: preferences.isEnabled ? "checkmark.shield.fill" : "lock.fill")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(preferences.isEnabled ? .green : .secondary)
+            } header: {
+                Text("Calendar Sharing")
+            } footer: {
+                Text("Calendar access and sharing are separate controls. Turning this off immediately blocks calendar metadata, event reads, and calendar mutations over the Thane connection while preserving your selections.")
+            }
+
+            Section {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("macOS Calendar Access")
+                        Text("Required to discover calendars and read events selected below.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Spacer()
+
+                    EventKitAuthorizationControl(
+                        status: appState.calendarAuthorization,
+                        privacyPane: "Privacy_Calendars",
+                        onRequest: { await appState.requestCalendarAccess() },
+                        onRecheck: { await appState.refreshCalendarAuthorization() }
+                    )
+                }
+                .padding(.vertical, 4)
+            } header: {
+                Text("Permission")
+            }
+
+            Section {
+                calendarSelectionContent
+            } header: {
+                HStack {
+                    Text("Calendars")
+                    Spacer()
+                    if appState.calendarAuthorization == .fullAccess {
+                        Button("Refresh") {
+                            Task { await loadCalendars() }
+                        }
+                        .buttonStyle(.borderless)
+                        .controlSize(.small)
+                        .disabled(isLoading)
+                    }
+                }
+            } footer: {
+                Text("Only checked calendars can leave this app. Descriptions are authored here and shared as context so Thane can understand each calendar’s scope and intended use. A calendar whose EventKit identifier changes after an account re-sync must be selected again.")
+            }
+        }
+        .formStyle(.grouped)
+        .padding()
+        .task {
+            await appState.refreshCalendarAuthorization()
+            if appState.calendarAuthorization == .fullAccess {
+                await loadCalendars()
+            }
+        }
+        .onChange(of: appState.calendarAuthorization) { _, status in
+            guard status == .fullAccess else {
+                calendars = []
+                return
+            }
+            Task { await loadCalendars() }
+        }
+    }
+
+    @ViewBuilder
+    private var calendarSelectionContent: some View {
+        switch appState.calendarAuthorization {
+        case .fullAccess:
+            if isLoading && calendars.isEmpty {
+                HStack {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Loading calendars…")
+                        .foregroundStyle(.secondary)
+                }
+            } else if let loadError {
+                Label(loadError, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
+            } else if calendars.isEmpty {
+                Text("No event calendars are available on this Mac.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(calendars) { calendar in
+                    calendarRow(calendar)
+                }
+            }
+        case .notDetermined:
+            Text("Grant Calendar access to choose which calendars Thane may use.")
+                .foregroundStyle(.secondary)
+        case .denied, .restricted, .writeOnly, .unknown:
+            Text("Full Calendar access is required to configure the sharing allowlist.")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func calendarRow(_ calendar: CalendarMetadata) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(isOn: sharedBinding(for: calendar.calendarIdentifier)) {
+                HStack(spacing: 8) {
+                    Circle()
+                        .fill(calendarColor(calendar.color))
+                        .frame(width: 10, height: 10)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 6) {
+                            Text(calendar.title)
+                            if calendar.isDefault {
+                                Text("Default")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Text(calendarDetail(calendar))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .toggleStyle(.checkbox)
+
+            if preferences.isShared(calendar.calendarIdentifier) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Description for Thane")
+                        .font(.caption.weight(.medium))
+                    TextField(
+                        "Scope, intended use, and any guidance Thane should know",
+                        text: descriptionBinding(for: calendar.calendarIdentifier),
+                        axis: .vertical
+                    )
+                    .lineLimit(2...5)
+                    Text("\(preferences.description(for: calendar.calendarIdentifier).count)/\(CalendarSharingPreferences.maxDescriptionLength)")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                }
+                .padding(.leading, 22)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var sharingEnabledBinding: Binding<Bool> {
+        Binding(
+            get: { preferences.isEnabled },
+            set: { preferences.isEnabled = $0 }
+        )
+    }
+
+    private func sharedBinding(for identifier: String) -> Binding<Bool> {
+        Binding(
+            get: { preferences.isShared(identifier) },
+            set: { preferences.setShared($0, for: identifier) }
+        )
+    }
+
+    private func descriptionBinding(for identifier: String) -> Binding<String> {
+        Binding(
+            get: { preferences.description(for: identifier) },
+            set: { preferences.setDescription($0, for: identifier) }
+        )
+    }
+
+    private var sharingSummary: String {
+        guard preferences.isEnabled else {
+            return "Calendar sharing is off."
+        }
+        let count = preferences.sharedCalendarCount
+        return count == 1 ? "1 calendar is shared." : "\(count) calendars are shared."
+    }
+
+    private func calendarDetail(_ calendar: CalendarMetadata) -> String {
+        let access = calendar.allowsContentModifications ? "Read & write" : "Read only"
+        return "\(calendar.source.title) · \(calendar.type.capitalized) · \(access)"
+    }
+
+    private func calendarColor(_ hex: String?) -> Color {
+        guard let hex,
+              hex.count == 7,
+              hex.first == "#",
+              let value = UInt64(hex.dropFirst(), radix: 16) else {
+            return .secondary
+        }
+        return Color(
+            red: Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >> 8) & 0xFF) / 255,
+            blue: Double(value & 0xFF) / 255
+        )
+    }
+
+    private func loadCalendars() async {
+        isLoading = true
+        loadError = nil
+        defer { isLoading = false }
+
+        do {
+            calendars = try await appState.calendarService.availableCalendars()
+        } catch {
+            calendars = []
+            loadError = "Couldn’t load calendars: \(error.localizedDescription)"
+        }
+    }
+}
+
+private struct EventKitAuthorizationControl: View {
+    let status: EventKitAuthorizationState
+    let privacyPane: String
+    let onRequest: () async -> Void
+    let onRecheck: () async -> Void
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 6) {
+            statusBadge
+            actionButton
+        }
+    }
+
+    @ViewBuilder
+    private var statusBadge: some View {
+        switch status {
+        case .notDetermined:
+            Text("Not Requested")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        case .fullAccess:
+            Label("Granted", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .denied, .restricted, .writeOnly, .unknown:
+            Label(status.label, systemImage: "xmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.red)
+        }
+    }
+
+    @ViewBuilder
+    private var actionButton: some View {
+        switch status {
+        case .notDetermined:
+            Button("Request Access") {
+                Task { await onRequest() }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+        case .fullAccess, .unknown:
+            Button("Re-check") {
+                Task { await onRecheck() }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        case .denied, .restricted, .writeOnly:
+            Button("Open Settings…") {
+                if let url = URL(
+                    string: "x-apple.systempreferences:com.apple.preference.security?\(privacyPane)"
+                ) {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+        }
+    }
+}
+
 // MARK: - Capabilities Tab
 
 struct CapabilitiesSettingsView: View {
@@ -665,7 +961,6 @@ struct CapabilitiesSettingsView: View {
             }
 
             Section {
-                calendarRow
                 remindersRow
                 contactsRow
             } header: {
@@ -680,7 +975,6 @@ struct CapabilitiesSettingsView: View {
         .padding()
         .onAppear {
             Task {
-                await appState.refreshCalendarAuthorization()
                 await appState.refreshContactsAuthorization()
                 await appState.refreshRemindersAuthorization()
             }
@@ -711,30 +1005,6 @@ struct CapabilitiesSettingsView: View {
         .padding(.vertical, 3)
     }
 
-    private var calendarRow: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Calendars")
-                Text("EventKit access for upcoming meetings and scheduling context.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: 6) {
-                eventKitStatusBadge(appState.calendarAuthorization)
-                eventKitActionButton(
-                    appState.calendarAuthorization,
-                    privacyPane: "Privacy_Calendars",
-                    onRequest: { await appState.requestCalendarAccess() },
-                    onRecheck: { await appState.refreshCalendarAuthorization() }
-                )
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
     private var remindersRow: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 3) {
@@ -746,15 +1016,12 @@ struct CapabilitiesSettingsView: View {
 
             Spacer()
 
-            VStack(alignment: .trailing, spacing: 6) {
-                eventKitStatusBadge(appState.remindersAuthorization)
-                eventKitActionButton(
-                    appState.remindersAuthorization,
-                    privacyPane: "Privacy_Reminders",
-                    onRequest: { await appState.requestRemindersAccess() },
-                    onRecheck: { await appState.refreshRemindersAuthorization() }
-                )
-            }
+            EventKitAuthorizationControl(
+                status: appState.remindersAuthorization,
+                privacyPane: "Privacy_Reminders",
+                onRequest: { await appState.requestRemindersAccess() },
+                onRecheck: { await appState.refreshRemindersAuthorization() }
+            )
         }
         .padding(.vertical, 4)
     }
@@ -776,55 +1043,6 @@ struct CapabilitiesSettingsView: View {
             }
         }
         .padding(.vertical, 4)
-    }
-
-    @ViewBuilder
-    private func eventKitStatusBadge(_ status: EventKitAuthorizationState) -> some View {
-        switch status {
-        case .notDetermined:
-            Text("Not Requested")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-        case .fullAccess:
-            Label("Granted", systemImage: "checkmark.circle.fill")
-                .font(.caption)
-                .foregroundStyle(.green)
-        case .denied, .restricted, .writeOnly, .unknown:
-            Label(status.label, systemImage: "xmark.circle.fill")
-                .font(.caption)
-                .foregroundStyle(.red)
-        }
-    }
-
-    @ViewBuilder
-    private func eventKitActionButton(
-        _ status: EventKitAuthorizationState,
-        privacyPane: String,
-        onRequest: @escaping () async -> Void,
-        onRecheck: @escaping () async -> Void
-    ) -> some View {
-        switch status {
-        case .notDetermined:
-            Button("Request Access") {
-                Task { await onRequest() }
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.small)
-        case .fullAccess, .unknown:
-            Button("Re-check") {
-                Task { await onRecheck() }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        case .denied, .restricted, .writeOnly:
-            Button("Open Settings…") {
-                if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(privacyPane)") {
-                    NSWorkspace.shared.open(url)
-                }
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-        }
     }
 
     @ViewBuilder

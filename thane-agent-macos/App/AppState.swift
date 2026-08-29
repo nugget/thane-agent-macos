@@ -39,6 +39,7 @@ enum AppSettingsTab: Hashable {
     case general
     case agent
     case capabilities
+    case calendar
     case access
 }
 
@@ -114,7 +115,8 @@ final class AppState {
     let updateManager = UpdateManager()
     let appUpdateManager = AppUpdateManager()
     let permissionsManager = PermissionsManager()
-    let calendarService = CalendarService()
+    let calendarSharingPreferences: CalendarSharingPreferences
+    let calendarService: CalendarService
     let contactsService = ContactsService()
     let remindersService = RemindersService()
     let systemContextPreferences: SystemContextPreferences
@@ -257,6 +259,12 @@ final class AppState {
     }
 
     init() {
+        let calendarSharingPreferences = CalendarSharingPreferences()
+        self.calendarSharingPreferences = calendarSharingPreferences
+        calendarService = CalendarService(
+            sharingPreferences: calendarSharingPreferences
+        )
+
         let systemContextPreferences = SystemContextPreferences()
         self.systemContextPreferences = systemContextPreferences
         systemContextService = SystemContextService(preferences: systemContextPreferences)

@@ -137,12 +137,18 @@ struct EventKitChangeObserverTests {
     }
 
     @Test
+    @MainActor
     func servicesStartObservingIdempotently() async {
         // The services register against the real default center, so this
         // only asserts that starting twice does not trap or double-register
         // — the forwarding behaviour is covered above. Both are torn down so
         // the test leaves no registration behind for the rest of the run.
-        let calendar = CalendarService()
+        let suiteName = "EventKitChangeObserverTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let calendar = CalendarService(
+            sharingPreferences: CalendarSharingPreferences(defaults: defaults)
+        )
         await calendar.startObservingChanges()
         await calendar.startObservingChanges()
         await calendar.stopObservingChanges()

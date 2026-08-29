@@ -19,7 +19,14 @@ struct PlatformToolDefinitionTests {
 
         let handlers: [(String, PlatformServiceHandler)] = [
             ("macos.contacts", ContactsPlatformHandler(contactsService: ContactsService())),
-            ("macos.calendar", CalendarPlatformHandler(calendarService: CalendarService())),
+            (
+                "macos.calendar",
+                CalendarPlatformHandler(
+                    calendarService: CalendarService(
+                        sharingPreferences: CalendarSharingPreferences(defaults: defaults)
+                    )
+                )
+            ),
             ("macos.reminders", RemindersPlatformHandler(remindersService: RemindersService())),
             (
                 "macos.system-context",
@@ -49,12 +56,20 @@ struct PlatformToolDefinitionTests {
 
     @Test
     @MainActor
-    func calendarKeepsLegacyToolNameForShadowing() {
-        let handler = CalendarPlatformHandler(calendarService: CalendarService())
+    func calendarKeepsLegacyToolNameForShadowing() throws {
+        let suiteName = "PlatformToolDefinitionTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let handler = CalendarPlatformHandler(
+            calendarService: CalendarService(
+                sharingPreferences: CalendarSharingPreferences(defaults: defaults)
+            )
+        )
         let names = handler.toolDefinitions.map(\.name)
         // Must keep the legacy name so it shadows the server's hand-coded
         // tool rather than adding a second calendar tool.
         #expect(names.contains("macos_calendar_events"))
+        #expect(names.contains("macos_calendars_list"))
         // Write stays unexposed until the operator policy lands.
         #expect(!handler.toolDefinitions.contains { $0.method == "create_event" })
     }
@@ -84,12 +99,14 @@ struct PlatformToolDefinitionTests {
             "start": AnyCodable("2026-06-23T00:00:00Z"),
             "end": AnyCodable("2026-06-24T00:00:00Z"),
             "calendar_names": AnyCodable(["Work", "Home"]),
+            "calendar_ids": AnyCodable(["calendar-work", "calendar-home"]),
             "query": AnyCodable("standup"),
             "limit": AnyCodable(5),
         ]
         let parsed = try decodePlatformParams(CalendarListRequest.self, from: full)
         #expect(parsed.start == "2026-06-23T00:00:00Z")
         #expect(parsed.calendarNames == ["Work", "Home"])
+        #expect(parsed.calendarIdentifiers == ["calendar-work", "calendar-home"])
         #expect(parsed.query == "standup")
         #expect(parsed.limit == 5)
 
@@ -100,6 +117,7 @@ struct PlatformToolDefinitionTests {
         ]
         let parsedMinimal = try decodePlatformParams(CalendarListRequest.self, from: minimal)
         #expect(parsedMinimal.calendarNames == nil)
+        #expect(parsedMinimal.calendarIdentifiers == nil)
         #expect(parsedMinimal.query == nil)
         #expect(parsedMinimal.limit == nil)
     }
