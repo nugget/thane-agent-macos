@@ -172,3 +172,199 @@ private struct FailingCalendarHandler: PlatformServiceHandler {
         throw CalendarServiceError.accessDenied
     }
 }
+
+/// The wire shapes the calendar capability emits and accepts, and the zone
+/// rules behind them.
+struct PlatformCalendarWireTests {
+    private static let chicago = TimeZone(identifier: "America/Chicago")!
+
+    @Test
+    func eventSummaryEncodesTheDeclaredZoneAndOmitsItWhenAbsent() throws {
+        let zoned = CalendarEventSummary(
+            title: "Berlin kickoff",
+            calendar: "Work",
+            start: "2026-09-02T10:00:00+02:00",
+            end: "2026-09-02T11:30:00+02:00",
+            allDay: false,
+            timeZone: "Europe/Berlin",
+            location: nil,
+            notesExcerpt: nil,
+            url: nil
+        )
+        let zonedJSON = String(decoding: try JSONEncoder().encode(zoned), as: UTF8.self)
+        #expect(zonedJSON.contains("\"time_zone\":\"Europe\\/Berlin\""))
+
+        // A floating event declares nothing, and the key must be absent
+        // rather than null so the far side can tell "no zone" from "UTC".
+        let floating = CalendarEventSummary(
+            title: "Focus block",
+            calendar: "Work",
+            start: "2026-09-02T10:00:00-05:00",
+            end: "2026-09-02T11:00:00-05:00",
+            allDay: false,
+            timeZone: nil,
+            location: nil,
+            notesExcerpt: nil,
+            url: nil
+        )
+        let encoder = JSONEncoder()
+        let floatingJSON = String(decoding: try encoder.encode(floating), as: UTF8.self)
+        #expect(!floatingJSON.contains("time_zone"))
+    }
+
+    @Test
+    func eventSummaryRoundTripsThroughTheWire() throws {
+        let original = CalendarEventSummary(
+            title: "Conference",
+            calendar: "Work",
+            start: "2026-09-02",
+            end: "2026-09-04",
+            allDay: true,
+            timeZone: nil,
+            location: nil,
+            notesExcerpt: nil,
+            url: nil
+        )
+
+        let decoded = try JSONDecoder().decode(
+            CalendarEventSummary.self,
+            from: try JSONEncoder().encode(original)
+        )
+
+        #expect(decoded == original)
+    }
+
+    @Test
+    func createEventResolvesAnAllDayRangeAsWholeDaysInTheTargetZone() throws {
+        let request = CalendarCreateEventRequest(
+            title: "Conference",
+            calendarName: "Work",
+            start: "2026-09-02",
+            end: "2026-09-04",
+            allDay: true,
+            location: nil,
+            notes: nil,
+            url: nil
+        )
+
+        let interval = try request.dateInterval(in: Self.chicago)
+
+        #expect(CalendarEventTimestamps.timestamp(interval.start, in: Self.chicago) == "2026-09-02T00:00:00-05:00")
+        // Inclusive through the 4th, so the exclusive end is the 5th.
+        #expect(CalendarEventTimestamps.timestamp(interval.end, in: Self.chicago) == "2026-09-05T00:00:00-05:00")
+    }
+
+    @Test
+    func createEventAcceptsASingleAllDayDate() throws {
+        let request = CalendarCreateEventRequest(
+            title: "Trash day",
+            calendarName: nil,
+            start: "2026-08-30",
+            end: "2026-08-30",
+            allDay: true,
+            location: nil,
+            notes: nil,
+            url: nil
+        )
+
+        let interval = try request.dateInterval(in: Self.chicago)
+
+        #expect(interval.duration == 24 * 3600)
+        #expect(CalendarEventTimestamps.timestamp(interval.start, in: Self.chicago) == "2026-08-30T00:00:00-05:00")
+    }
+
+    @Test
+    func createEventIgnoresTheClockOnAnAllDayTimestamp() throws {
+        // The write-side twin of the read bug: a UTC midnight handed to an
+        // all-day event is the previous evening in Chicago, and reading it
+        // as an instant files the event a day early. Only the date counts.
+        let request = CalendarCreateEventRequest(
+            title: "Conference",
+            calendarName: nil,
+            start: "2026-09-02T00:00:00Z",
+            end: "2026-09-02T00:00:00Z",
+            allDay: true,
+            location: nil,
+            notes: nil,
+            url: nil
+        )
+
+        let interval = try request.dateInterval(in: Self.chicago)
+
+        #expect(CalendarEventTimestamps.timestamp(interval.start, in: Self.chicago) == "2026-09-02T00:00:00-05:00")
+    }
+
+    @Test
+    func createEventRejectsABackwardsAllDayRange() {
+        let request = CalendarCreateEventRequest(
+            title: "Impossible",
+            calendarName: nil,
+            start: "2026-09-04",
+            end: "2026-09-02",
+            allDay: true,
+            location: nil,
+            notes: nil,
+            url: nil
+        )
+
+        do {
+            _ = try request.dateInterval(in: Self.chicago)
+            Issue.record("Expected a backwards all-day range to be rejected.")
+        } catch let error as CalendarServiceError {
+            #expect(error.code == "invalid_window")
+        } catch {
+            Issue.record("Expected CalendarServiceError.invalidWindow, got \(error.localizedDescription)")
+        }
+    }
+
+    @Test
+    func createEventStillTreatsATimedRangeAsInstants() throws {
+        let request = CalendarCreateEventRequest(
+            title: "Dentist",
+            calendarName: nil,
+            start: "2026-09-02T09:00:00-05:00",
+            end: "2026-09-02T10:00:00-05:00",
+            allDay: false,
+            location: nil,
+            notes: nil,
+            url: nil
+        )
+
+        #expect(try request.dateInterval(in: Self.chicago).duration == 3600)
+    }
+
+    @Test
+    func createEventRejectsAMalformedAllDayBound() {
+        // Truncating to the first ten characters before validating would
+        // accept these as September 2. Both are malformed and must say so.
+        for bad in ["2026-09-02garbage", "2026-09-02T25:99:99Z", "2026-09-02T"] {
+            let request = CalendarCreateEventRequest(
+                title: "Conference",
+                calendarName: nil,
+                start: bad,
+                end: "2026-09-02",
+                allDay: true,
+                location: nil,
+                notes: nil,
+                url: nil
+            )
+
+            do {
+                _ = try request.dateInterval(in: Self.chicago)
+                Issue.record("Expected \(bad) to be rejected as an all-day bound.")
+            } catch let error as CalendarServiceError {
+                #expect(error.code == "invalid_timestamp")
+            } catch {
+                Issue.record("Expected invalid_timestamp for \(bad), got \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @Test
+    func dateOnlyDetectionSeparatesDatesFromTimestamps() {
+        #expect(CalendarTimestamp.isDateOnly("2026-08-29"))
+        #expect(!CalendarTimestamp.isDateOnly("2026-08-29T00:00:00Z"))
+        #expect(!CalendarTimestamp.isDateOnly("2026-08-2"))
+        #expect(!CalendarTimestamp.isDateOnly("not a date"))
+    }
+}
