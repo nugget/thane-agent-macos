@@ -384,12 +384,18 @@ struct PlatformCalendarRequestContractTests {
 
     @Test
     func aBoundWithItsOwnOffsetIsTakenAtFaceValue() throws {
+        // The offsets deliberately differ from the zoneless fallback zone:
+        // Chicago is -05:00 on this date, and a bound at -05:00 would pass
+        // even if the implementation threw the offset away and parsed the
+        // digits locally. +02:00 only lands on 2:00 AM Chicago if the
+        // embedded offset actually won.
         let interval = try Self.request(
-            start: "2026-08-29T09:00:00-05:00",
-            end: "2026-08-29T17:00:00-05:00"
+            start: "2026-08-29T09:00:00+02:00",
+            end: "2026-08-29T17:00:00+02:00"
         ).dateInterval(zonelessIn: Self.chicago)
 
-        #expect(Self.iso(interval.start) == "2026-08-29T09:00:00-05:00")
+        #expect(Self.iso(interval.start) == "2026-08-29T02:00:00-05:00")
+        #expect(Self.iso(interval.end) == "2026-08-29T10:00:00-05:00")
         #expect(interval.duration == 8 * 3600)
     }
 
