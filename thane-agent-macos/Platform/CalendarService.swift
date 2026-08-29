@@ -76,6 +76,33 @@ nonisolated enum CalendarTimestamp {
         throw CalendarServiceError.invalidTimestamp(field, value)
     }
 
+    /// Parses a bare `yyyy-MM-dd` date as midnight in the given zone.
+    ///
+    /// An all-day event is a run of days, so its bounds arrive as dates.
+    /// Reading one as a UTC instant and handing that to EventKit is how an
+    /// all-day event ends up on the day before in every zone west of the
+    /// meridian, which is the write-side twin of the read bug.
+    static func parseDate(_ value: String, field: String, in zone: TimeZone) throws -> Date {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = zone
+        formatter.dateFormat = "yyyy-MM-dd"
+        guard let date = formatter.date(from: value) else {
+            throw CalendarServiceError.invalidTimestamp(field, value)
+        }
+        return date
+    }
+
+    /// Whether a value names a whole date rather than a moment.
+    static func isDateOnly(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count == 10 else {
+            return false
+        }
+        return trimmed.allSatisfy { $0.isNumber || $0 == "-" }
+    }
+
     private static func formatter(fractionalSeconds: Bool) -> ISO8601DateFormatter {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = fractionalSeconds
@@ -145,13 +172,41 @@ nonisolated struct CalendarCreateEventRequest: Codable, Equatable, Sendable {
         case url
     }
 
-    nonisolated func dateInterval() throws -> DateInterval {
+    /// Resolves the interval to store, in the zone the event will live in.
+    ///
+    /// An all-day event is given as inclusive dates and becomes the
+    /// midnight-to-midnight span covering them; both bounds are resolved in
+    /// `zone` rather than UTC, so the days written are the days meant. A
+    /// timed event keeps the instants it was given.
+    nonisolated func dateInterval(in zone: TimeZone = .current) throws -> DateInterval {
+        if allDay == true {
+            let firstDay = try CalendarTimestamp.parseDate(startDateValue, field: "start", in: zone)
+            let lastDay = try CalendarTimestamp.parseDate(endDateValue, field: "end", in: zone)
+            guard lastDay >= firstDay else {
+                throw CalendarServiceError.invalidWindow
+            }
+            return CalendarEventTimestamps.allDayInterval(firstDay: firstDay, lastDay: lastDay, in: zone)
+        }
+
         let startDate = try CalendarTimestamp.parse(start, field: "start")
         let endDate = try CalendarTimestamp.parse(end, field: "end")
         guard endDate > startDate else {
             throw CalendarServiceError.invalidWindow
         }
         return DateInterval(start: startDate, end: endDate)
+    }
+
+    /// The date portion of `start`, so an all-day event can be given either
+    /// as a bare date or as a full timestamp whose clock is ignored.
+    private var startDateValue: String { Self.dateComponent(of: start) }
+    private var endDateValue: String { Self.dateComponent(of: end) }
+
+    private static func dateComponent(of value: String) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if CalendarTimestamp.isDateOnly(trimmed) {
+            return trimmed
+        }
+        return String(trimmed.prefix(10))
     }
 }
 
@@ -168,9 +223,23 @@ nonisolated struct CalendarCreateEventResponse: Codable, Equatable, Sendable {
 nonisolated struct CalendarEventSummary: Codable, Equatable, Sendable {
     let title: String
     let calendar: String
+    /// Inclusive start. For a timed event an RFC3339 timestamp carrying the
+    /// offset of the zone the event is scheduled in; for an all-day event a
+    /// bare `yyyy-MM-dd` date, which has no time and no zone.
     let start: String
+    /// End of the event, in the same shape as `start`. For a timed event
+    /// this is exclusive; for an all-day event it is the **inclusive** last
+    /// date the event occupies, already resolved against the event's own
+    /// calendar so the reader never has to guess whether EventKit meant
+    /// 23:59:59 or the following midnight.
     let end: String
     let allDay: Bool
+    /// IANA name of the zone the event is scheduled in, when it declares
+    /// one. This is intent, not decoration: an event recorded in
+    /// `Europe/Berlin` says the person keeping it expects to be in Berlin.
+    /// Absent for all-day events, which have no zone, and for floating
+    /// events, where the offset on the timestamps is all that is known.
+    let timeZone: String?
     let location: String?
     let notesExcerpt: String?
     let url: String?
@@ -181,6 +250,7 @@ nonisolated struct CalendarEventSummary: Codable, Equatable, Sendable {
         case start
         case end
         case allDay = "all_day"
+        case timeZone = "time_zone"
         case location
         case notesExcerpt = "notes_excerpt"
         case url
@@ -189,11 +259,9 @@ nonisolated struct CalendarEventSummary: Codable, Equatable, Sendable {
 
 actor CalendarService {
     private let store: EKEventStore
-    private let eventTimestampFormatter: ISO8601DateFormatter
 
     init(store: EKEventStore = EKEventStore()) {
         self.store = store
-        self.eventTimestampFormatter = Self.makeEventTimestampFormatter()
     }
 
     func authorizationState() -> EventKitAuthorizationState {
@@ -271,8 +339,8 @@ actor CalendarService {
     func createEvent(request: CalendarCreateEventRequest) async throws -> CalendarCreateEventResponse {
         try await ensureWriteAccess()
 
-        let interval = try request.dateInterval()
         let calendar = try targetCalendar(named: request.calendarName)
+        let interval = try request.dateInterval(in: .current)
 
         let event = EKEvent(eventStore: store)
         event.calendar = calendar
@@ -382,16 +450,65 @@ actor CalendarService {
     }
 
     private func makeSummary(event: EKEvent) -> CalendarEventSummary {
-        CalendarEventSummary(
+        // EKEvent.calendar is implicitly unwrapped and is nil on an event
+        // that has not been filed yet, so read it defensively rather than
+        // trapping on a shape the type system claims cannot happen.
+        let calendarTitle = Self.normalizedOrNil(event.calendar?.title) ?? "(unknown calendar)"
+        let common = (
             title: Self.normalizedOrNil(event.title) ?? "(untitled event)",
-            calendar: event.calendar.title,
-            start: formatTimestamp(event.startDate),
-            end: formatTimestamp(event.endDate),
-            allDay: event.isAllDay,
+            calendar: calendarTitle,
             location: Self.normalizedOrNil(event.location),
-            notesExcerpt: Self.truncateNotes(event.notes),
+            notes: Self.truncateNotes(event.notes),
             url: event.url?.absoluteString
         )
+
+        if event.isAllDay {
+            // Resolve the days in the event's own zone. A day boundary is
+            // only meaningful somewhere, and this side is the only one that
+            // knows where.
+            let zone = Self.allDayZone(for: event)
+            let lastDay = CalendarEventTimestamps.inclusiveLastDay(
+                start: event.startDate,
+                end: event.endDate,
+                in: zone
+            )
+            return CalendarEventSummary(
+                title: common.title,
+                calendar: common.calendar,
+                start: CalendarEventTimestamps.date(event.startDate, in: zone),
+                end: CalendarEventTimestamps.date(lastDay, in: zone),
+                allDay: true,
+                timeZone: nil,
+                location: common.location,
+                notesExcerpt: common.notes,
+                url: common.url
+            )
+        }
+
+        let zone = event.timeZone ?? .current
+        return CalendarEventSummary(
+            title: common.title,
+            calendar: common.calendar,
+            start: CalendarEventTimestamps.timestamp(event.startDate, in: zone),
+            end: CalendarEventTimestamps.timestamp(event.endDate, in: zone),
+            allDay: false,
+            // Only a zone the event actually declares is reported. Falling
+            // back to this Mac's current zone would dress up "we do not
+            // know" as a statement about where the event is, which is the
+            // class of invention this whole change removes.
+            timeZone: event.timeZone?.identifier,
+            location: common.location,
+            notesExcerpt: common.notes,
+            url: common.url
+        )
+    }
+
+    /// The zone an all-day event's dates are resolved against. All-day
+    /// events rarely carry one of their own — they are days, not times —
+    /// and EventKit stores their bounds as midnight on this Mac's clock, so
+    /// the current zone is the frame those bounds were written in.
+    private static func allDayZone(for event: EKEvent) -> TimeZone {
+        event.timeZone ?? .current
     }
 
     private static func normalizedOrNil(_ value: String?) -> String? {
@@ -425,15 +542,6 @@ actor CalendarService {
         return String(normalized[..<index]) + "..."
     }
 
-    private func formatTimestamp(_ date: Date) -> String {
-        eventTimestampFormatter.string(from: date)
-    }
-
-    nonisolated private static func makeEventTimestampFormatter() -> ISO8601DateFormatter {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }
 }
 
 struct CalendarPlatformHandler: PlatformServiceHandler {
