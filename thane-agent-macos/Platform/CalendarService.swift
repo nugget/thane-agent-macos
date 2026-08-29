@@ -94,6 +94,25 @@ nonisolated enum CalendarTimestamp {
         return date
     }
 
+    /// The calendar date an all-day bound names, in `zone`.
+    ///
+    /// Accepts either a bare `yyyy-MM-dd` or a full RFC3339 timestamp whose
+    /// clock is ignored — an all-day event occupies the date that was
+    /// written, whatever time of day rode along with it.
+    ///
+    /// A timestamp is validated in full before its clock is discarded.
+    /// Truncating first and parsing the remainder would accept
+    /// `2026-09-02garbage` as September 2, quietly widening the contract to
+    /// "anything whose first ten characters look like a date".
+    static func parseAllDayDate(_ value: String, field: String, in zone: TimeZone) throws -> Date {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isDateOnly(trimmed) {
+            return try parseDate(trimmed, field: field, in: zone)
+        }
+        _ = try parse(trimmed, field: field)
+        return try parseDate(String(trimmed.prefix(10)), field: field, in: zone)
+    }
+
     /// Whether a value names a whole date rather than a moment.
     static func isDateOnly(_ value: String) -> Bool {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -180,8 +199,8 @@ nonisolated struct CalendarCreateEventRequest: Codable, Equatable, Sendable {
     /// timed event keeps the instants it was given.
     nonisolated func dateInterval(in zone: TimeZone = .current) throws -> DateInterval {
         if allDay == true {
-            let firstDay = try CalendarTimestamp.parseDate(startDateValue, field: "start", in: zone)
-            let lastDay = try CalendarTimestamp.parseDate(endDateValue, field: "end", in: zone)
+            let firstDay = try CalendarTimestamp.parseAllDayDate(start, field: "start", in: zone)
+            let lastDay = try CalendarTimestamp.parseAllDayDate(end, field: "end", in: zone)
             guard lastDay >= firstDay else {
                 throw CalendarServiceError.invalidWindow
             }
@@ -196,18 +215,6 @@ nonisolated struct CalendarCreateEventRequest: Codable, Equatable, Sendable {
         return DateInterval(start: startDate, end: endDate)
     }
 
-    /// The date portion of `start`, so an all-day event can be given either
-    /// as a bare date or as a full timestamp whose clock is ignored.
-    private var startDateValue: String { Self.dateComponent(of: start) }
-    private var endDateValue: String { Self.dateComponent(of: end) }
-
-    private static func dateComponent(of value: String) -> String {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if CalendarTimestamp.isDateOnly(trimmed) {
-            return trimmed
-        }
-        return String(trimmed.prefix(10))
-    }
 }
 
 nonisolated struct CalendarCreateEventResponse: Codable, Equatable, Sendable {

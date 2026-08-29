@@ -334,6 +334,33 @@ struct PlatformCalendarWireTests {
     }
 
     @Test
+    func createEventRejectsAMalformedAllDayBound() {
+        // Truncating to the first ten characters before validating would
+        // accept these as September 2. Both are malformed and must say so.
+        for bad in ["2026-09-02garbage", "2026-09-02T25:99:99Z", "2026-09-02T"] {
+            let request = CalendarCreateEventRequest(
+                title: "Conference",
+                calendarName: nil,
+                start: bad,
+                end: "2026-09-02",
+                allDay: true,
+                location: nil,
+                notes: nil,
+                url: nil
+            )
+
+            do {
+                _ = try request.dateInterval(in: Self.chicago)
+                Issue.record("Expected \(bad) to be rejected as an all-day bound.")
+            } catch let error as CalendarServiceError {
+                #expect(error.code == "invalid_timestamp")
+            } catch {
+                Issue.record("Expected invalid_timestamp for \(bad), got \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @Test
     func dateOnlyDetectionSeparatesDatesFromTimestamps() {
         #expect(CalendarTimestamp.isDateOnly("2026-08-29"))
         #expect(!CalendarTimestamp.isDateOnly("2026-08-29T00:00:00Z"))
