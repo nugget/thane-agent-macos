@@ -4,6 +4,7 @@ import Foundation
 enum CalendarServiceError: PlatformServiceError, Sendable {
     case invalidTimestamp(String, String)
     case invalidWindow
+    case invalidLimit(Int)
     case accessDenied
     case restricted
     case writeOnlyAccess
@@ -19,6 +20,8 @@ enum CalendarServiceError: PlatformServiceError, Sendable {
             "invalid_timestamp"
         case .invalidWindow:
             "invalid_window"
+        case .invalidLimit:
+            "invalid_limit"
         case .accessDenied:
             "calendar_access_denied"
         case .restricted:
@@ -44,6 +47,8 @@ enum CalendarServiceError: PlatformServiceError, Sendable {
             "Invalid \(field) timestamp: \(value)"
         case .invalidWindow:
             "Calendar request end must be after start."
+        case .invalidLimit(let value):
+            "Calendar request limit must be positive (got \(value)); omit it for the default of \(CalendarService.defaultEventLimit)."
         case .accessDenied:
             "Calendar access was denied."
         case .restricted:
@@ -66,14 +71,48 @@ enum CalendarServiceError: PlatformServiceError, Sendable {
 
 /// ISO8601 timestamp parsing shared by the calendar request types.
 nonisolated enum CalendarTimestamp {
-    static func parse(_ value: String, field: String) throws -> Date {
+    /// Zone-less shapes accepted for a window bound, tried after the forms
+    /// that carry their own offset and read in `zone`.
+    ///
+    /// A model asked what is on the calendar this afternoon writes the hour
+    /// it means. Rejecting that outright — which is what requiring a full
+    /// RFC3339 offset did — spends a turn on a rejection when the intent was
+    /// never in doubt. Reading it as UTC instead would be worse: that is the
+    /// silent shift this whole contract exists to remove, so the zone is
+    /// stated in the tool description rather than left to be inferred.
+    static let zonelessLayouts = [
+        "yyyy-MM-dd'T'HH:mm:ss",
+        "yyyy-MM-dd HH:mm:ss",
+        "yyyy-MM-dd'T'HH:mm",
+        "yyyy-MM-dd HH:mm",
+        "yyyy-MM-dd",
+    ]
+
+    static func parse(_ value: String, field: String, zonelessIn zone: TimeZone? = nil) throws -> Date {
         if let date = formatter(fractionalSeconds: false).date(from: value) {
             return date
         }
         if let date = formatter(fractionalSeconds: true).date(from: value) {
             return date
         }
+        if let zone {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            for layout in zonelessLayouts {
+                if let date = zonelessFormatter(layout: layout, zone: zone).date(from: trimmed) {
+                    return date
+                }
+            }
+        }
         throw CalendarServiceError.invalidTimestamp(field, value)
+    }
+
+    private static func zonelessFormatter(layout: String, zone: TimeZone) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = zone
+        formatter.dateFormat = layout
+        return formatter
     }
 
     /// Parses a bare `yyyy-MM-dd` date as midnight in the given zone.
@@ -154,18 +193,50 @@ nonisolated struct CalendarListRequest: Codable, Equatable, Sendable {
         case limit
     }
 
-    nonisolated func dateInterval() throws -> DateInterval {
-        let startDate = try CalendarTimestamp.parse(start, field: "start")
-        let endDate = try CalendarTimestamp.parse(end, field: "end")
+    /// Resolves the requested window. A bound carrying its own offset is
+    /// taken at face value; one without is read in `zone`, this Mac's zone,
+    /// which is the frame a caller writing a bare local time means.
+    nonisolated func dateInterval(zonelessIn zone: TimeZone = .current) throws -> DateInterval {
+        let startDate = try CalendarTimestamp.parse(start, field: "start", zonelessIn: zone)
+        let endDate = try CalendarTimestamp.parse(end, field: "end", zonelessIn: zone)
         guard endDate > startDate else {
             throw CalendarServiceError.invalidWindow
         }
         return DateInterval(start: startDate, end: endDate)
     }
+
+    /// The number of events to return, or a thrown error when the request
+    /// asked for a count that cannot mean anything.
+    ///
+    /// Zero and negative counts are rejected rather than quietly treated as
+    /// "no limit" or "the default": both readings are guesses at what a
+    /// caller meant, and a wrong guess here silently changes how much of the
+    /// calendar comes back.
+    nonisolated func resolvedLimit() throws -> Int {
+        guard let limit else {
+            return CalendarService.defaultEventLimit
+        }
+        guard limit > 0 else {
+            throw CalendarServiceError.invalidLimit(limit)
+        }
+        return min(limit, CalendarService.maxEventLimit)
+    }
 }
 
 nonisolated struct CalendarListResponse: Codable, Equatable, Sendable {
     let events: [CalendarEventSummary]
+    /// Whether the window held more events than were returned.
+    ///
+    /// Without this a capped result is indistinguishable from a complete
+    /// one, and a reader that sees twenty events concludes there are twenty.
+    /// Silent truncation reads as full coverage, which is the one thing a
+    /// calendar answer must never do.
+    let truncated: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case events
+        case truncated
+    }
 }
 
 // Marked `nonisolated` so the test target can decode/read these under the
@@ -265,6 +336,20 @@ nonisolated struct CalendarEventSummary: Codable, Equatable, Sendable {
 }
 
 actor CalendarService {
+    /// How many events come back when a request does not say.
+    ///
+    /// Matches the ceiling the server's hand-coded tool used to enforce.
+    /// That enforcement became unreachable the moment the Mac started
+    /// authoring its own tool — the authored definition shadows the legacy
+    /// handler by name — so the bound has to live on the side that owns the
+    /// schema, which is this one.
+    static let defaultEventLimit = 20
+
+    /// The most events any single request can return, however many it asks
+    /// for. A calendar window is unbounded in principle; a model's context
+    /// is not.
+    static let maxEventLimit = 100
+
     private let store: EKEventStore
     private var changeObserver: EventKitChangeObserver?
 
@@ -374,11 +459,13 @@ actor CalendarService {
                 return haystack.contains(normalizedQuery)
             }
 
-        if let limit = request.limit, limit > 0, events.count > limit {
+        let limit = try request.resolvedLimit()
+        let truncated = events.count > limit
+        if truncated {
             events = Array(events.prefix(limit))
         }
 
-        return CalendarListResponse(events: events.map(makeSummary))
+        return CalendarListResponse(events: events.map(makeSummary), truncated: truncated)
     }
 
     func createEvent(request: CalendarCreateEventRequest) async throws -> CalendarCreateEventResponse {
@@ -611,11 +698,11 @@ struct CalendarPlatformHandler: PlatformServiceHandler {
               "properties": {
                 "start": {
                   "type": "string",
-                  "description": "Required. Inclusive start of the window, RFC3339 (e.g. 2026-06-23T00:00:00Z)."
+                  "description": "Required. Inclusive start of the window. Prefer RFC3339 with an explicit offset (2026-06-23T00:00:00-05:00). A bare YYYY-MM-DD or YYYY-MM-DD HH:MM is read in the companion Mac's own timezone, which is not necessarily the household one."
                 },
                 "end": {
                   "type": "string",
-                  "description": "Required. Exclusive end of the window, RFC3339."
+                  "description": "Required. Exclusive end of the window, in the same forms as start."
                 },
                 "calendar_names": {
                   "type": "array",
@@ -628,7 +715,9 @@ struct CalendarPlatformHandler: PlatformServiceHandler {
                 },
                 "limit": {
                   "type": "integer",
-                  "description": "Maximum number of events to return."
+                  "minimum": 1,
+                  "maximum": 100,
+                  "description": "Maximum number of events to return. Defaults to 20, capped at 100. When more events fall in the window than are returned, the result says so — narrow the window rather than assuming you saw everything."
                 }
               },
               "required": ["start", "end"]

@@ -38,7 +38,8 @@ nonisolated enum AdvancedConnectionActivation: Equatable {
 enum AppSettingsTab: Hashable {
     case general
     case agent
-    case permissions
+    case capabilities
+    case access
 }
 
 nonisolated enum AgentConfigurationMode: String, CaseIterable, Identifiable, Sendable {
@@ -116,6 +117,8 @@ final class AppState {
     let calendarService = CalendarService()
     let contactsService = ContactsService()
     let remindersService = RemindersService()
+    let systemContextPreferences: SystemContextPreferences
+    let systemContextService: SystemContextService
 
     // Native REST API panel managers — each polls only while its panel is visible.
     let systemStatusManager = SystemStatusManager()
@@ -254,6 +257,10 @@ final class AppState {
     }
 
     init() {
+        let systemContextPreferences = SystemContextPreferences()
+        self.systemContextPreferences = systemContextPreferences
+        systemContextService = SystemContextService(preferences: systemContextPreferences)
+
         hadStoredConfigurationMode = UserDefaults.standard.object(
             forKey: AgentConfigurationMode.defaultsKey
         ) != nil
@@ -275,6 +282,10 @@ final class AppState {
         platformRouter.register(
             capability: "macos.reminders",
             handler: RemindersPlatformHandler(remindersService: remindersService)
+        )
+        platformRouter.register(
+            capability: "macos.system-context",
+            handler: SystemContextPlatformHandler(service: systemContextService)
         )
         connection.registeredCapabilities = platformRouter.capabilities
 
