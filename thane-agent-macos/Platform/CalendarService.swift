@@ -351,9 +351,47 @@ actor CalendarService {
     static let maxEventLimit = 100
 
     private let store: EKEventStore
+    private var changeObserver: EventKitChangeObserver?
 
     init(store: EKEventStore = EKEventStore()) {
         self.store = store
+    }
+
+    /// Starts refreshing this service's store whenever EventKit reports a
+    /// change made outside this process. Idempotent.
+    ///
+    /// Explicitly started rather than wired up in `init` so constructing a
+    /// service — which tests do freely — never registers a process-wide
+    /// observer as a side effect.
+    func startObservingChanges() {
+        guard changeObserver == nil else {
+            return
+        }
+        let observer = EventKitChangeObserver { [weak self] in
+            await self?.discardCachedState()
+        }
+        changeObserver = observer
+        observer.start()
+    }
+
+    /// Stops refreshing on external changes. Present so a caller that
+    /// creates a short-lived service can tear its observer down explicitly
+    /// rather than relying on deallocation.
+    func stopObservingChanges() {
+        changeObserver?.stop()
+        changeObserver = nil
+    }
+
+    /// Drops everything the store has cached, so the next query reads the
+    /// database as it stands rather than as it stood at launch.
+    ///
+    /// Unlike the reminders service this needs no in-flight guard. Events
+    /// are fetched synchronously — `store.events(matching:)` returns, and
+    /// the sort, filter, and summary mapping all run in the same actor step
+    /// — so there is no suspension between reading the objects and finishing
+    /// with them for a reset to slip into.
+    private func discardCachedState() {
+        store.reset()
     }
 
     func authorizationState() -> EventKitAuthorizationState {
