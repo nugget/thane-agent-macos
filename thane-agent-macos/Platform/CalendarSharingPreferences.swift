@@ -73,10 +73,20 @@ final class CalendarSharingPreferences {
 
         do {
             let stored = try JSONDecoder().decode([CalendarShareConfiguration].self, from: data)
+            let normalized = stored.map { configuration in
+                var configuration = configuration
+                configuration.description = String(
+                    configuration.description.prefix(Self.maxDescriptionLength)
+                )
+                return configuration
+            }
             configurations = Dictionary(
-                stored.map { ($0.calendarIdentifier, $0) },
+                normalized.map { ($0.calendarIdentifier, $0) },
                 uniquingKeysWith: { _, latest in latest }
             )
+            if normalized != stored {
+                persistConfigurations()
+            }
         } catch {
             configurations = [:]
             Self.logger.error("Could not decode calendar sharing preferences: \(error.localizedDescription)")

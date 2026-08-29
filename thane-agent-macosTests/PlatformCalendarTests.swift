@@ -176,6 +176,130 @@ struct PlatformCalendarTests {
     }
 }
 
+/// The allowlist is the security boundary for both reads and writes. These
+/// tests exercise policy selection without requiring access to the operator's
+/// real EventKit store.
+struct CalendarSelectionPolicyTests {
+    private static let work = CalendarSelectionCandidate(
+        identifier: "calendar-work",
+        name: "Work"
+    )
+    private static let personal = CalendarSelectionCandidate(
+        identifier: "calendar-personal",
+        name: "Personal"
+    )
+
+    @Test
+    func omittedFiltersReturnOnlySharedCalendars() throws {
+        let shared = try CalendarService.sharedCalendarCandidates(
+            available: [Self.work, Self.personal],
+            sharedIdentifiers: [Self.work.identifier]
+        )
+
+        let selected = try CalendarService.selectedCalendarCandidates(
+            identifiers: [],
+            names: [],
+            from: shared
+        )
+
+        #expect(selected == [Self.work])
+    }
+
+    @Test
+    func exactIdentifierCannotSelectAnUnsharedCalendar() throws {
+        let shared = try CalendarService.sharedCalendarCandidates(
+            available: [Self.work, Self.personal],
+            sharedIdentifiers: [Self.work.identifier]
+        )
+
+        do {
+            _ = try CalendarService.selectedCalendarCandidates(
+                identifiers: [Self.personal.identifier],
+                names: [],
+                from: shared
+            )
+            Issue.record("Expected an unshared calendar identifier to be rejected.")
+        } catch let error as CalendarServiceError {
+            #expect(error.code == "calendar_not_found")
+        } catch {
+            Issue.record("Expected calendar_not_found, got \(error.localizedDescription)")
+        }
+    }
+
+    @Test
+    func mixedValidAndUnknownIdentifiersFailClosed() {
+        do {
+            _ = try CalendarService.selectedCalendarCandidates(
+                identifiers: [Self.work.identifier, "calendar-missing"],
+                names: [],
+                from: [Self.work]
+            )
+            Issue.record("Expected a mixed valid and unknown selection to be rejected.")
+        } catch let error as CalendarServiceError {
+            #expect(error.code == "calendar_not_found")
+            #expect(error.errorDescription?.contains("calendar-missing") == true)
+        } catch {
+            Issue.record("Expected calendar_not_found, got \(error.localizedDescription)")
+        }
+    }
+
+    @Test
+    func staleSharedIdentifiersAreExcluded() throws {
+        let shared = try CalendarService.sharedCalendarCandidates(
+            available: [Self.work, Self.personal],
+            sharedIdentifiers: [Self.work.identifier, "calendar-stale"]
+        )
+
+        #expect(shared == [Self.work])
+    }
+
+    @Test
+    func targetCalendarRejectsAnUnsharedIdentifier() {
+        do {
+            _ = try CalendarService.targetCalendarCandidate(
+                identifier: Self.personal.identifier,
+                named: nil,
+                defaultIdentifier: nil,
+                from: [Self.work]
+            )
+            Issue.record("Expected an unshared target identifier to be rejected.")
+        } catch let error as CalendarServiceError {
+            #expect(error.code == "calendar_not_found")
+        } catch {
+            Issue.record("Expected calendar_not_found, got \(error.localizedDescription)")
+        }
+    }
+
+    @Test
+    func targetIdentifierTakesPrecedenceOverName() throws {
+        let selected = try CalendarService.targetCalendarCandidate(
+            identifier: Self.personal.identifier,
+            named: Self.work.name,
+            defaultIdentifier: nil,
+            from: [Self.work, Self.personal]
+        )
+
+        #expect(selected == Self.personal)
+    }
+
+    @Test
+    func unsharedDefaultCalendarIsRejected() {
+        do {
+            _ = try CalendarService.targetCalendarCandidate(
+                identifier: nil,
+                named: nil,
+                defaultIdentifier: Self.personal.identifier,
+                from: [Self.work]
+            )
+            Issue.record("Expected an unshared default calendar to be rejected.")
+        } catch let error as CalendarServiceError {
+            #expect(error.code == "calendar_no_writable_calendar")
+        } catch {
+            Issue.record("Expected calendar_no_writable_calendar, got \(error.localizedDescription)")
+        }
+    }
+}
+
 private struct FailingCalendarHandler: PlatformServiceHandler {
     let version = "1"
     let supportedMethods = ["list_events"]

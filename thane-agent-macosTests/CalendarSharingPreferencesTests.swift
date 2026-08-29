@@ -74,6 +74,44 @@ struct CalendarSharingPreferencesTests {
 
     @Test
     @MainActor
+    func persistedDescriptionsAreBoundedOnLoadAndRepaired() throws {
+        let suiteName = "CalendarSharingPreferencesTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let stored = [
+            CalendarShareConfiguration(
+                calendarIdentifier: "calendar-large",
+                isShared: true,
+                description: String(
+                    repeating: "x",
+                    count: CalendarSharingPreferences.maxDescriptionLength + 100
+                )
+            ),
+        ]
+        defaults.set(
+            try JSONEncoder().encode(stored),
+            forKey: "calendarSharing.configurations"
+        )
+
+        let preferences = CalendarSharingPreferences(defaults: defaults)
+
+        #expect(
+            preferences.snapshot().description(for: "calendar-large")?.count
+                == CalendarSharingPreferences.maxDescriptionLength
+        )
+        let repairedData = try #require(
+            defaults.data(forKey: "calendarSharing.configurations")
+        )
+        let repaired = try JSONDecoder().decode(
+            [CalendarShareConfiguration].self,
+            from: repairedData
+        )
+        #expect(repaired.first?.description.count == CalendarSharingPreferences.maxDescriptionLength)
+    }
+
+    @Test
+    @MainActor
     func disabledSharingStopsAPlatformRequestBeforeEventKitAccess() async throws {
         let suiteName = "CalendarSharingPreferencesTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))

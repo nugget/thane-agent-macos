@@ -466,6 +466,14 @@ nonisolated struct CalendarEventSummary: Codable, Equatable, Sendable {
     }
 }
 
+/// The identity fields used to apply the operator's calendar policy without
+/// depending on EventKit objects. Keeping selection pure makes the consent
+/// boundary directly testable.
+nonisolated struct CalendarSelectionCandidate: Equatable, Sendable {
+    let identifier: String
+    let name: String
+}
+
 actor CalendarService {
     /// How many events come back when a request does not say.
     ///
@@ -634,7 +642,10 @@ actor CalendarService {
 
     func createEvent(request: CalendarCreateEventRequest) async throws -> CalendarCreateEventResponse {
         let sharing = try await requireSharingPolicy()
-        try await ensureWriteAccess()
+        // The per-calendar write policy is keyed by EventKit identifiers, so
+        // resolving it requires the same calendar visibility as a read. Under
+        // write-only authorization EventKit cannot enumerate those calendars.
+        try await ensureReadAccess()
 
         let calendars = try currentSharedCalendars(sharing: sharing)
         let calendar = try targetCalendar(
@@ -698,24 +709,6 @@ actor CalendarService {
         }
     }
 
-    private func ensureWriteAccess() async throws {
-        switch authorizationState() {
-        case .fullAccess, .writeOnly:
-            return
-        case .notDetermined:
-            let updatedState = try await requestAccessIfNeeded()
-            guard updatedState == .fullAccess || updatedState == .writeOnly else {
-                throw CalendarServiceError.accessDenied
-            }
-        case .denied:
-            throw CalendarServiceError.accessDenied
-        case .restricted:
-            throw CalendarServiceError.restricted
-        case .unknown:
-            throw CalendarServiceError.accessDenied
-        }
-    }
-
     private func requireSharingPolicy() async throws -> CalendarSharingSnapshot {
         let sharing = await sharingPreferences.snapshot()
         guard sharing.isEnabled else {
@@ -730,14 +723,12 @@ actor CalendarService {
     private func currentSharedCalendars(
         sharing: CalendarSharingSnapshot
     ) throws -> [EKCalendar] {
-        let sharedIdentifiers = sharing.sharedCalendarIdentifiers
-        let calendars = store.calendars(for: .event).filter {
-            sharedIdentifiers.contains($0.calendarIdentifier)
-        }
-        guard !calendars.isEmpty else {
-            throw CalendarServiceError.noSharedCalendars
-        }
-        return calendars
+        let calendars = store.calendars(for: .event)
+        let candidates = try Self.sharedCalendarCandidates(
+            available: Self.selectionCandidates(for: calendars),
+            sharedIdentifiers: sharing.sharedCalendarIdentifiers
+        )
+        return Self.calendars(matching: candidates, from: calendars)
     }
 
     private func targetCalendar(
@@ -745,28 +736,18 @@ actor CalendarService {
         named name: String?,
         from calendars: [EKCalendar]
     ) throws -> EKCalendar {
-        if let identifier = Self.normalizedOrNil(identifier) {
-            if let match = calendars.first(where: { $0.calendarIdentifier == identifier }) {
-                return match
-            }
-            throw CalendarServiceError.noMatchingCalendars([identifier])
-        }
-
-        if let trimmed = Self.normalizedOrNil(name) {
-            let normalized = trimmed.lowercased()
-            if let match = calendars.first(where: { $0.title.lowercased() == normalized }) {
-                return match
-            }
-            throw CalendarServiceError.noMatchingCalendars([trimmed])
-        }
-
-        guard let defaultCalendar = store.defaultCalendarForNewEvents,
-              calendars.contains(where: {
-                  $0.calendarIdentifier == defaultCalendar.calendarIdentifier
-              }) else {
+        let candidate = try Self.targetCalendarCandidate(
+            identifier: identifier,
+            named: name,
+            defaultIdentifier: store.defaultCalendarForNewEvents?.calendarIdentifier,
+            from: Self.selectionCandidates(for: calendars)
+        )
+        guard let calendar = calendars.first(where: {
+            $0.calendarIdentifier == candidate.identifier
+        }) else {
             throw CalendarServiceError.noWritableCalendar
         }
-        return defaultCalendar
+        return calendar
     }
 
     private func selectedCalendars(
@@ -774,6 +755,62 @@ actor CalendarService {
         names: [String],
         from calendars: [EKCalendar]
     ) throws -> [EKCalendar] {
+        let candidates = try Self.selectedCalendarCandidates(
+            identifiers: identifiers,
+            names: names,
+            from: Self.selectionCandidates(for: calendars)
+        )
+        return Self.calendars(matching: candidates, from: calendars)
+    }
+
+    nonisolated static func sharedCalendarCandidates(
+        available: [CalendarSelectionCandidate],
+        sharedIdentifiers: Set<String>
+    ) throws -> [CalendarSelectionCandidate] {
+        let calendars = available.filter {
+            sharedIdentifiers.contains($0.identifier)
+        }
+        guard !calendars.isEmpty else {
+            throw CalendarServiceError.noSharedCalendars
+        }
+        return calendars
+    }
+
+    nonisolated static func targetCalendarCandidate(
+        identifier: String?,
+        named name: String?,
+        defaultIdentifier: String?,
+        from calendars: [CalendarSelectionCandidate]
+    ) throws -> CalendarSelectionCandidate {
+        if let identifier = normalizedOrNil(identifier) {
+            if let match = calendars.first(where: { $0.identifier == identifier }) {
+                return match
+            }
+            throw CalendarServiceError.noMatchingCalendars([identifier])
+        }
+
+        if let trimmed = normalizedOrNil(name) {
+            let normalized = trimmed.lowercased()
+            if let match = calendars.first(where: { $0.name.lowercased() == normalized }) {
+                return match
+            }
+            throw CalendarServiceError.noMatchingCalendars([trimmed])
+        }
+
+        guard let defaultIdentifier,
+              let defaultCalendar = calendars.first(where: {
+                  $0.identifier == defaultIdentifier
+              }) else {
+            throw CalendarServiceError.noWritableCalendar
+        }
+        return defaultCalendar
+    }
+
+    nonisolated static func selectedCalendarCandidates(
+        identifiers: [String],
+        names: [String],
+        from calendars: [CalendarSelectionCandidate]
+    ) throws -> [CalendarSelectionCandidate] {
         let normalizedIdentifiers = identifiers
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
@@ -781,9 +818,9 @@ actor CalendarService {
         if !normalizedIdentifiers.isEmpty {
             let requested = Set(normalizedIdentifiers)
             let matches = calendars.filter {
-                requested.contains($0.calendarIdentifier)
+                requested.contains($0.identifier)
             }
-            let matched = Set(matches.map(\.calendarIdentifier))
+            let matched = Set(matches.map(\.identifier))
             let missing = requested.subtracting(matched).sorted()
             guard missing.isEmpty else {
                 throw CalendarServiceError.noMatchingCalendars(missing)
@@ -801,16 +838,37 @@ actor CalendarService {
 
         let requested = Set(normalizedNames)
         let matches = calendars.filter { calendar in
-            requested.contains(calendar.title.lowercased())
+            requested.contains(calendar.name.lowercased())
         }
 
-        let matched = Set(matches.map { $0.title.lowercased() })
+        let matched = Set(matches.map { $0.name.lowercased() })
         let missing = requested.subtracting(matched).sorted()
         guard missing.isEmpty else {
             throw CalendarServiceError.noMatchingCalendars(missing)
         }
 
         return matches
+    }
+
+    private static func selectionCandidates(
+        for calendars: [EKCalendar]
+    ) -> [CalendarSelectionCandidate] {
+        calendars.map {
+            CalendarSelectionCandidate(
+                identifier: $0.calendarIdentifier,
+                name: $0.title
+            )
+        }
+    }
+
+    private static func calendars(
+        matching candidates: [CalendarSelectionCandidate],
+        from calendars: [EKCalendar]
+    ) -> [EKCalendar] {
+        let identifiers = Set(candidates.map(\.identifier))
+        return calendars.filter {
+            identifiers.contains($0.calendarIdentifier)
+        }
     }
 
     private func makeSummary(event: EKEvent) -> CalendarEventSummary {
@@ -975,7 +1033,7 @@ actor CalendarService {
         return String(format: "#%02X%02X%02X", red, green, blue)
     }
 
-    private static func normalizedOrNil(_ value: String?) -> String? {
+    nonisolated static func normalizedOrNil(_ value: String?) -> String? {
         guard let value else {
             return nil
         }
