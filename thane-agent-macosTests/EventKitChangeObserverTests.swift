@@ -39,7 +39,8 @@ struct EventKitChangeObserverTests {
         let counter = RefreshCounter()
         let observer = EventKitChangeObserver(center: center) { await counter.record() }
 
-        await observer.start()
+        observer.start()
+        defer { observer.stop() }
         center.post(name: .EKEventStoreChanged, object: nil)
 
         #expect(await counter.wait(for: 1) == 1)
@@ -51,7 +52,8 @@ struct EventKitChangeObserverTests {
         let counter = RefreshCounter()
         let observer = EventKitChangeObserver(center: center) { await counter.record() }
 
-        await observer.start()
+        observer.start()
+        defer { observer.stop() }
         center.post(name: .EKEventStoreChanged, object: nil)
         center.post(name: .EKEventStoreChanged, object: nil)
         center.post(name: .EKEventStoreChanged, object: nil)
@@ -68,8 +70,9 @@ struct EventKitChangeObserverTests {
         let counter = RefreshCounter()
         let observer = EventKitChangeObserver(center: center) { await counter.record() }
 
-        await observer.start()
-        await observer.start()
+        observer.start()
+        observer.start()
+        defer { observer.stop() }
         center.post(name: .EKEventStoreChanged, object: nil)
 
         #expect(await counter.wait(for: 2) == 1)
@@ -81,12 +84,12 @@ struct EventKitChangeObserverTests {
         let counter = RefreshCounter()
         let observer = EventKitChangeObserver(center: center) { await counter.record() }
 
-        await observer.start()
+        observer.start()
         center.post(name: .EKEventStoreChanged, object: nil)
         #expect(await counter.wait(for: 1) == 1)
 
-        await observer.stop()
-        #expect(await observer.isObserving == false)
+        observer.stop()
+        #expect(observer.isObserving == false)
 
         center.post(name: .EKEventStoreChanged, object: nil)
         #expect(await counter.wait(for: 2) == 1)
@@ -96,9 +99,9 @@ struct EventKitChangeObserverTests {
     func stopWithoutStartIsHarmless() async {
         let observer = EventKitChangeObserver(center: NotificationCenter()) {}
 
-        await observer.stop()
+        observer.stop()
 
-        #expect(await observer.isObserving == false)
+        #expect(observer.isObserving == false)
     }
 
     @Test
@@ -107,8 +110,28 @@ struct EventKitChangeObserverTests {
         let counter = RefreshCounter()
         let observer = EventKitChangeObserver(center: center) { await counter.record() }
 
-        await observer.start()
+        observer.start()
+        defer { observer.stop() }
         center.post(name: Notification.Name("SomethingElseEntirely"), object: nil)
+
+        #expect(await counter.wait(for: 1) == 0)
+    }
+
+    @Test
+    func releasingAnObserverEndsItsSubscription() async {
+        // A block-based registration is retained by the center, and the
+        // block holds the handler rather than the observer — so without a
+        // deinit backstop an observer that simply goes out of scope leaves a
+        // live registration that nothing can reach and nothing will remove.
+        let center = NotificationCenter()
+        let counter = RefreshCounter()
+
+        do {
+            let observer = EventKitChangeObserver(center: center) { await counter.record() }
+            observer.start()
+        }
+
+        center.post(name: .EKEventStoreChanged, object: nil)
 
         #expect(await counter.wait(for: 1) == 0)
     }
@@ -117,13 +140,16 @@ struct EventKitChangeObserverTests {
     func servicesStartObservingIdempotently() async {
         // The services register against the real default center, so this
         // only asserts that starting twice does not trap or double-register
-        // — the forwarding behaviour is covered above.
+        // — the forwarding behaviour is covered above. Both are torn down so
+        // the test leaves no registration behind for the rest of the run.
         let calendar = CalendarService()
         await calendar.startObservingChanges()
         await calendar.startObservingChanges()
+        await calendar.stopObservingChanges()
 
         let reminders = RemindersService()
         await reminders.startObservingChanges()
         await reminders.startObservingChanges()
+        await reminders.stopObservingChanges()
     }
 }

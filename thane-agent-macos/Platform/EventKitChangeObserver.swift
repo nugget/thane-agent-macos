@@ -21,10 +21,25 @@ import Foundation
 /// rather than one in particular: `reset()` is cheap, and a store that
 /// discards its cache once too often is merely slightly slower, while one
 /// that discards it once too rarely is incorrect.
-actor EventKitChangeObserver {
+///
+/// A lock rather than an actor, because the lifetime is the point. A
+/// registration must be removable from `deinit`, and a nonisolated `deinit`
+/// cannot reach actor-isolated state. The mutable state here is one token;
+/// `center` and `onChange` are immutable, and `NotificationCenter` is itself
+/// thread-safe — which is what `@unchecked Sendable` is asserting.
+nonisolated final class EventKitChangeObserver: @unchecked Sendable {
     private let center: NotificationCenter
     private let onChange: @Sendable () async -> Void
-    private var token: NSObjectProtocol?
+
+    private let lock = NSLock()
+    /// Guarded by `lock`, except in `deinit` where no other reference to
+    /// this object can exist.
+    ///
+    /// `nonisolated(unsafe)` because the concurrency checker cannot see the
+    /// lock, and an opaque `NSObjectProtocol` is not Sendable. The safety
+    /// argument is the lock plus the deinit rule above, stated here rather
+    /// than assumed.
+    nonisolated(unsafe) private var token: NSObjectProtocol?
 
     init(center: NotificationCenter = .default, onChange: @escaping @Sendable () async -> Void) {
         self.center = center
@@ -35,6 +50,8 @@ actor EventKitChangeObserver {
     /// that cannot easily tell whether startup already ran does not end up
     /// resetting its store twice per change.
     func start() {
+        lock.lock()
+        defer { lock.unlock() }
         guard token == nil else {
             return
         }
@@ -46,6 +63,8 @@ actor EventKitChangeObserver {
 
     /// Stops watching. Safe to call when never started.
     func stop() {
+        lock.lock()
+        defer { lock.unlock() }
         if let token {
             center.removeObserver(token)
         }
@@ -54,6 +73,23 @@ actor EventKitChangeObserver {
 
     /// Whether this observer currently holds a registration.
     var isObserving: Bool {
-        token != nil
+        lock.lock()
+        defer { lock.unlock() }
+        return token != nil
+    }
+
+    /// Removes the registration if the owner never did.
+    ///
+    /// A block-based registration is retained by the notification center,
+    /// and the block holds the handler rather than this observer — so
+    /// releasing an observer without stopping it leaves a registration
+    /// nothing can reach and nothing will remove, spawning a task on every
+    /// EventKit notification for the rest of the process. Correct code calls
+    /// stop(); this is here so code that merely goes out of scope does not
+    /// leak. No lock: deinit runs only once no other reference exists.
+    deinit {
+        if let token {
+            center.removeObserver(token)
+        }
     }
 }

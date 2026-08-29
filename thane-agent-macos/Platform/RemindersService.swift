@@ -115,6 +115,10 @@ actor RemindersService {
     private let store: EKEventStore
     private var changeObserver: EventKitChangeObserver?
 
+    /// Holds a reset back while a fetch is handing results to EventKit's
+    /// completion handler. See [DeferredResetGate].
+    private var resetGate = DeferredResetGate()
+
     init(store: EKEventStore = EKEventStore()) {
         self.store = store
     }
@@ -125,7 +129,7 @@ actor RemindersService {
     /// Explicitly started rather than wired up in `init` so constructing a
     /// service — which tests do freely — never registers a process-wide
     /// observer as a side effect.
-    func startObservingChanges() async {
+    func startObservingChanges() {
         guard changeObserver == nil else {
             return
         }
@@ -133,13 +137,48 @@ actor RemindersService {
             await self?.discardCachedState()
         }
         changeObserver = observer
-        await observer.start()
+        observer.start()
+    }
+
+    /// Stops refreshing on external changes. Present so a caller that
+    /// creates a short-lived service can tear its observer down explicitly
+    /// rather than relying on deallocation.
+    func stopObservingChanges() {
+        changeObserver?.stop()
+        changeObserver = nil
     }
 
     /// Drops everything the store has cached, so the next query reads the
     /// database as it stands rather than as it stood at launch.
+    ///
+    /// Held back while a fetch is outstanding. `EKEventStore.reset()`
+    /// invalidates every object fetched from the store, and this service's
+    /// fetch hands its results to a completion handler that EventKit runs on
+    /// its own queue — off this actor entirely. Resetting mid-map would pull
+    /// `EKReminder` instances out from under code actively reading their
+    /// titles and due dates, and the window is a real one: the actor
+    /// suspends across the whole fetch, so a notification arriving then is
+    /// free to run this.
+    ///
+    /// A deferred reset is not a skipped one. It lands the moment the last
+    /// fetch finishes, so the next query still sees the database as it
+    /// stands.
     private func discardCachedState() {
-        store.reset()
+        if resetGate.requestReset() {
+            store.reset()
+        }
+    }
+
+    /// Marks a fetch as outstanding, holding off any reset until it ends.
+    private func beginFetch() {
+        resetGate.beginWork()
+    }
+
+    /// Releases a fetch and applies a reset that arrived while it ran.
+    private func endFetch() {
+        if resetGate.endWork() {
+            store.reset()
+        }
     }
 
     func authorizationState() -> EventKitAuthorizationState {
@@ -184,7 +223,11 @@ actor RemindersService {
 
         // Filter and map inside the completion handler so only Sendable
         // ReminderSummary values cross the continuation boundary — EKReminder
-        // is not Sendable.
+        // is not Sendable. That handler runs on EventKit's queue while this
+        // actor is suspended, so the store must not be reset underneath it.
+        beginFetch()
+        defer { endFetch() }
+
         let summaries: [ReminderSummary] = await withCheckedContinuation { continuation in
             store.fetchReminders(matching: predicate) { reminders in
                 var matched = (reminders ?? []).filter { reminder in

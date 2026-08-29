@@ -278,7 +278,7 @@ actor CalendarService {
     /// Explicitly started rather than wired up in `init` so constructing a
     /// service — which tests do freely — never registers a process-wide
     /// observer as a side effect.
-    func startObservingChanges() async {
+    func startObservingChanges() {
         guard changeObserver == nil else {
             return
         }
@@ -286,11 +286,25 @@ actor CalendarService {
             await self?.discardCachedState()
         }
         changeObserver = observer
-        await observer.start()
+        observer.start()
+    }
+
+    /// Stops refreshing on external changes. Present so a caller that
+    /// creates a short-lived service can tear its observer down explicitly
+    /// rather than relying on deallocation.
+    func stopObservingChanges() {
+        changeObserver?.stop()
+        changeObserver = nil
     }
 
     /// Drops everything the store has cached, so the next query reads the
     /// database as it stands rather than as it stood at launch.
+    ///
+    /// Unlike the reminders service this needs no in-flight guard. Events
+    /// are fetched synchronously — `store.events(matching:)` returns, and
+    /// the sort, filter, and summary mapping all run in the same actor step
+    /// — so there is no suspension between reading the objects and finishing
+    /// with them for a reset to slip into.
     private func discardCachedState() {
         store.reset()
     }
