@@ -368,3 +368,111 @@ struct PlatformCalendarWireTests {
         #expect(!CalendarTimestamp.isDateOnly("not a date"))
     }
 }
+
+/// The list_events request contract: what a bound may look like, and how
+/// many events can come back.
+struct PlatformCalendarRequestContractTests {
+    private static let chicago = TimeZone(identifier: "America/Chicago")!
+
+    private static func request(start: String, end: String, limit: Int? = nil) -> CalendarListRequest {
+        CalendarListRequest(start: start, end: end, calendarNames: nil, query: nil, limit: limit)
+    }
+
+    private static func iso(_ date: Date) -> String {
+        CalendarEventTimestamps.timestamp(date, in: chicago)
+    }
+
+    @Test
+    func aBoundWithItsOwnOffsetIsTakenAtFaceValue() throws {
+        let interval = try Self.request(
+            start: "2026-08-29T09:00:00-05:00",
+            end: "2026-08-29T17:00:00-05:00"
+        ).dateInterval(zonelessIn: Self.chicago)
+
+        #expect(Self.iso(interval.start) == "2026-08-29T09:00:00-05:00")
+        #expect(interval.duration == 8 * 3600)
+    }
+
+    @Test
+    func aZonelessBoundIsReadLocallyRatherThanAsUTC() throws {
+        // Reading these as UTC is the silent five-hour shift the zone work
+        // removed; rejecting them outright was the behaviour before this.
+        for start in ["2026-08-29T09:00:00", "2026-08-29 09:00:00", "2026-08-29 09:00", "2026-08-29T09:00"] {
+            let interval = try Self.request(start: start, end: "2026-08-29T17:00:00-05:00")
+                .dateInterval(zonelessIn: Self.chicago)
+            #expect(Self.iso(interval.start) == "2026-08-29T09:00:00-05:00", "start form \(start)")
+        }
+    }
+
+    @Test
+    func aBareDateIsLocalMidnight() throws {
+        let interval = try Self.request(start: "2026-08-29", end: "2026-08-30")
+            .dateInterval(zonelessIn: Self.chicago)
+
+        #expect(Self.iso(interval.start) == "2026-08-29T00:00:00-05:00")
+        #expect(Self.iso(interval.end) == "2026-08-30T00:00:00-05:00")
+    }
+
+    @Test
+    func aMalformedBoundIsStillRejected() {
+        do {
+            _ = try Self.request(start: "next tuesday", end: "2026-08-30")
+                .dateInterval(zonelessIn: Self.chicago)
+            Issue.record("Expected an unparseable bound to be rejected.")
+        } catch let error as CalendarServiceError {
+            #expect(error.code == "invalid_timestamp")
+        } catch {
+            Issue.record("Expected invalid_timestamp, got \(error.localizedDescription)")
+        }
+    }
+
+    @Test
+    func anOmittedLimitTakesTheDefault() throws {
+        #expect(try Self.request(start: "2026-08-29", end: "2026-08-30").resolvedLimit()
+            == CalendarService.defaultEventLimit)
+    }
+
+    @Test
+    func anOversizedLimitIsCappedRatherThanRejected() throws {
+        // The ceiling exists to protect the reader's context, not to police
+        // the caller — asking for too much should still answer.
+        #expect(try Self.request(start: "2026-08-29", end: "2026-08-30", limit: 5000).resolvedLimit()
+            == CalendarService.maxEventLimit)
+    }
+
+    @Test
+    func aReasonableLimitIsHonoured() throws {
+        #expect(try Self.request(start: "2026-08-29", end: "2026-08-30", limit: 5).resolvedLimit() == 5)
+    }
+
+    @Test
+    func aNonPositiveLimitIsRejected() {
+        // Zero could mean "none" or "no limit". Both are guesses at intent,
+        // and either guess silently changes how much calendar comes back.
+        for bad in [0, -1] {
+            do {
+                _ = try Self.request(start: "2026-08-29", end: "2026-08-30", limit: bad).resolvedLimit()
+                Issue.record("Expected limit \(bad) to be rejected.")
+            } catch let error as CalendarServiceError {
+                #expect(error.code == "invalid_limit")
+            } catch {
+                Issue.record("Expected invalid_limit for \(bad), got \(error.localizedDescription)")
+            }
+        }
+    }
+
+    @Test
+    func theResponseCarriesWhetherItWasTruncated() throws {
+        let complete = CalendarListResponse(events: [], truncated: false)
+        let capped = CalendarListResponse(events: [], truncated: true)
+
+        let completeJSON = String(decoding: try JSONEncoder().encode(complete), as: UTF8.self)
+        let cappedJSON = String(decoding: try JSONEncoder().encode(capped), as: UTF8.self)
+
+        #expect(completeJSON.contains("\"truncated\":false"))
+        #expect(cappedJSON.contains("\"truncated\":true"))
+
+        let decoded = try JSONDecoder().decode(CalendarListResponse.self, from: Data(cappedJSON.utf8))
+        #expect(decoded.truncated)
+    }
+}
