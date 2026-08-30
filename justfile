@@ -435,20 +435,23 @@ deploy-macos deploy_path=deploy-path +hosts: notarize-app
     app="{{app}}"
     build_dir="{{build-dir}}"
     version="$(just describe)"
+    # Both SSH and rsync pass remote paths through the remote login shell.
+    printf -v remote_deploy_path '%q' "$deploy_path"
+    printf -v remote_app_path '%q' "${deploy_path}/${app}.app"
 
     for host in "${hosts[@]}"; do
         echo "Stopping ${app} on ${host}..."
         ssh "$host" "pkill -x '${app}' 2>/dev/null || true"
         sleep 2
 
-        echo "Deploying to ${host}:~/${deploy_path}/${app}.app..."
-        ssh "$host" "mkdir -p '${deploy_path}' && rm -rf '${deploy_path}/${app}.app'"
+        echo "Deploying to ${host}:${deploy_path}/${app}.app..."
+        ssh "$host" "mkdir -p ${remote_deploy_path} && rm -rf ${remote_app_path}"
         rsync -av \
             "${build_dir}/export/${app}.app" \
-            "${host}:${deploy_path}/"
+            "${host}:${remote_deploy_path}/"
 
         echo "Starting ${app} on ${host}..."
-        ssh "$host" "open '${deploy_path}/${app}.app'"
+        ssh "$host" "open ${remote_app_path}"
 
         echo "Deployed version: ${version} -> ${host}"
     done
