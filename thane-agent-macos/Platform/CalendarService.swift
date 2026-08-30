@@ -1,3 +1,4 @@
+import AppKit
 import EventKit
 import Foundation
 
@@ -5,6 +6,8 @@ enum CalendarServiceError: PlatformServiceError, Sendable {
     case invalidTimestamp(String, String)
     case invalidWindow
     case invalidLimit(Int)
+    case sharingDisabled
+    case noSharedCalendars
     case accessDenied
     case restricted
     case writeOnlyAccess
@@ -22,6 +25,10 @@ enum CalendarServiceError: PlatformServiceError, Sendable {
             "invalid_window"
         case .invalidLimit:
             "invalid_limit"
+        case .sharingDisabled:
+            "calendar_sharing_disabled"
+        case .noSharedCalendars:
+            "calendar_no_shared_calendars"
         case .accessDenied:
             "calendar_access_denied"
         case .restricted:
@@ -49,6 +56,10 @@ enum CalendarServiceError: PlatformServiceError, Sendable {
             "Calendar request end must be after start."
         case .invalidLimit(let value):
             "Calendar request limit must be positive (got \(value)); omit it for the default of \(CalendarService.defaultEventLimit)."
+        case .sharingDisabled:
+            "Calendar sharing is disabled in the macOS companion app. The operator can enable it in Settings > Calendar."
+        case .noSharedCalendars:
+            "Calendar sharing is enabled, but the operator has not selected any available calendars to share."
         case .accessDenied:
             "Calendar access was denied."
         case .restricted:
@@ -56,9 +67,9 @@ enum CalendarServiceError: PlatformServiceError, Sendable {
         case .writeOnlyAccess:
             "Calendar access is write-only; read access is required."
         case .noMatchingCalendars(let names):
-            "No matching calendars found for: \(names.joined(separator: ", "))"
+            "No operator-shared calendars matched: \(names.joined(separator: ", "))"
         case .noWritableCalendar:
-            "No writable calendar is available for new events."
+            "No operator-shared writable calendar is available for new events."
         case .saveFailed(let reason):
             "Failed to save calendar event: \(reason)"
         case .invalidURL(let value):
@@ -182,6 +193,9 @@ nonisolated struct CalendarListRequest: Codable, Equatable, Sendable {
     // `keyNotFound` and fail every unfiltered list_events request. nil
     // and [] are both treated as "no calendar filter" downstream.
     let calendarNames: [String]?
+    /// Exact EventKit identifiers returned by `macos_calendars_list`.
+    /// Identifiers take precedence over display names when both are present.
+    let calendarIdentifiers: [String]?
     let query: String?
     let limit: Int?
 
@@ -189,8 +203,25 @@ nonisolated struct CalendarListRequest: Codable, Equatable, Sendable {
         case start
         case end
         case calendarNames = "calendar_names"
+        case calendarIdentifiers = "calendar_ids"
         case query
         case limit
+    }
+
+    init(
+        start: String,
+        end: String,
+        calendarNames: [String]?,
+        calendarIdentifiers: [String]? = nil,
+        query: String?,
+        limit: Int?
+    ) {
+        self.start = start
+        self.end = end
+        self.calendarNames = calendarNames
+        self.calendarIdentifiers = calendarIdentifiers
+        self.query = query
+        self.limit = limit
     }
 
     /// Resolves the requested window. A bound carrying its own offset is
@@ -223,6 +254,56 @@ nonisolated struct CalendarListRequest: Codable, Equatable, Sendable {
     }
 }
 
+nonisolated struct CalendarCatalogResponse: Codable, Equatable, Sendable {
+    let calendars: [CalendarMetadata]
+}
+
+nonisolated struct CalendarSourceMetadata: Codable, Equatable, Sendable {
+    let identifier: String
+    let title: String
+    let type: String
+    let isDelegate: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case identifier
+        case title
+        case type
+        case isDelegate = "is_delegate"
+    }
+}
+
+/// Calendar identity and operator-authored context exposed to Thane.
+/// Descriptions are app-owned metadata, not EventKit or Calendar.app notes.
+nonisolated struct CalendarMetadata: Codable, Equatable, Identifiable, Sendable {
+    var id: String { calendarIdentifier }
+
+    let calendarIdentifier: String
+    let title: String
+    let description: String?
+    let source: CalendarSourceMetadata
+    let type: String
+    let allowsContentModifications: Bool
+    let isSubscribed: Bool
+    let isImmutable: Bool
+    let color: String?
+    let supportedAvailability: [String]
+    let isDefault: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case calendarIdentifier = "calendar_id"
+        case title
+        case description
+        case source
+        case type
+        case allowsContentModifications = "allows_content_modifications"
+        case isSubscribed = "is_subscribed"
+        case isImmutable = "is_immutable"
+        case color
+        case supportedAvailability = "supported_availability"
+        case isDefault = "is_default"
+    }
+}
+
 nonisolated struct CalendarListResponse: Codable, Equatable, Sendable {
     let events: [CalendarEventSummary]
     /// Whether the window held more events than were returned.
@@ -244,6 +325,7 @@ nonisolated struct CalendarListResponse: Codable, Equatable, Sendable {
 nonisolated struct CalendarCreateEventRequest: Codable, Equatable, Sendable {
     let title: String
     let calendarName: String?
+    let calendarIdentifier: String?
     let start: String
     let end: String
     let allDay: Bool?
@@ -254,12 +336,35 @@ nonisolated struct CalendarCreateEventRequest: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case title
         case calendarName = "calendar_name"
+        case calendarIdentifier = "calendar_id"
         case start
         case end
         case allDay = "all_day"
         case location
         case notes
         case url
+    }
+
+    init(
+        title: String,
+        calendarName: String?,
+        calendarIdentifier: String? = nil,
+        start: String,
+        end: String,
+        allDay: Bool?,
+        location: String?,
+        notes: String?,
+        url: String?
+    ) {
+        self.title = title
+        self.calendarName = calendarName
+        self.calendarIdentifier = calendarIdentifier
+        self.start = start
+        self.end = end
+        self.allDay = allDay
+        self.location = location
+        self.notes = notes
+        self.url = url
     }
 
     /// Resolves the interval to store, in the zone the event will live in.
@@ -301,6 +406,7 @@ nonisolated struct CalendarCreateEventResponse: Codable, Equatable, Sendable {
 nonisolated struct CalendarEventSummary: Codable, Equatable, Sendable {
     let title: String
     let calendar: String
+    let calendarIdentifier: String
     /// Inclusive start. For a timed event an RFC3339 timestamp carrying the
     /// offset of the zone the event is scheduled in; for an all-day event a
     /// bare `yyyy-MM-dd` date, which has no time and no zone.
@@ -325,6 +431,7 @@ nonisolated struct CalendarEventSummary: Codable, Equatable, Sendable {
     enum CodingKeys: String, CodingKey {
         case title
         case calendar
+        case calendarIdentifier = "calendar_id"
         case start
         case end
         case allDay = "all_day"
@@ -333,6 +440,38 @@ nonisolated struct CalendarEventSummary: Codable, Equatable, Sendable {
         case notesExcerpt = "notes_excerpt"
         case url
     }
+
+    init(
+        title: String,
+        calendar: String,
+        calendarIdentifier: String = "",
+        start: String,
+        end: String,
+        allDay: Bool,
+        timeZone: String?,
+        location: String?,
+        notesExcerpt: String?,
+        url: String?
+    ) {
+        self.title = title
+        self.calendar = calendar
+        self.calendarIdentifier = calendarIdentifier
+        self.start = start
+        self.end = end
+        self.allDay = allDay
+        self.timeZone = timeZone
+        self.location = location
+        self.notesExcerpt = notesExcerpt
+        self.url = url
+    }
+}
+
+/// The identity fields used to apply the operator's calendar policy without
+/// depending on EventKit objects. Keeping selection pure makes the consent
+/// boundary directly testable.
+nonisolated struct CalendarSelectionCandidate: Equatable, Sendable {
+    let identifier: String
+    let name: String
 }
 
 actor CalendarService {
@@ -351,10 +490,15 @@ actor CalendarService {
     static let maxEventLimit = 100
 
     private let store: EKEventStore
+    private let sharingPreferences: CalendarSharingPreferences
     private var changeObserver: EventKitChangeObserver?
 
-    init(store: EKEventStore = EKEventStore()) {
+    init(
+        store: EKEventStore = EKEventStore(),
+        sharingPreferences: CalendarSharingPreferences
+    ) {
         self.store = store
+        self.sharingPreferences = sharingPreferences
     }
 
     /// Starts refreshing this service's store whenever EventKit reports a
@@ -424,11 +568,39 @@ actor CalendarService {
         return granted ? .fullAccess : .denied
     }
 
+    /// All event calendars visible to the app, for local Settings only. This
+    /// deliberately bypasses the export gate so the operator can configure the
+    /// allowlist while sharing is disabled.
+    func availableCalendars() async throws -> [CalendarMetadata] {
+        try await ensureReadAccess()
+        let sharing = await sharingPreferences.snapshot()
+        return metadata(
+            for: store.calendars(for: .event),
+            sharing: sharing
+        )
+    }
+
+    /// Operator-approved calendar identities and context for model discovery.
+    func listSharedCalendars() async throws -> CalendarCatalogResponse {
+        let sharing = try await requireSharingPolicy()
+        try await ensureReadAccess()
+        let calendars = try currentSharedCalendars(sharing: sharing)
+        return CalendarCatalogResponse(
+            calendars: metadata(for: calendars, sharing: sharing)
+        )
+    }
+
     func listEvents(request: CalendarListRequest) async throws -> CalendarListResponse {
+        let sharing = try await requireSharingPolicy()
         try await ensureReadAccess()
 
         let interval = try request.dateInterval()
-        let calendars = try selectedCalendars(named: request.calendarNames ?? [])
+        let sharedCalendars = try currentSharedCalendars(sharing: sharing)
+        let calendars = try selectedCalendars(
+            identifiers: request.calendarIdentifiers ?? [],
+            names: request.calendarNames ?? [],
+            from: sharedCalendars
+        )
         let predicate = store.predicateForEvents(
             withStart: interval.start,
             end: interval.end,
@@ -469,9 +641,18 @@ actor CalendarService {
     }
 
     func createEvent(request: CalendarCreateEventRequest) async throws -> CalendarCreateEventResponse {
-        try await ensureWriteAccess()
+        let sharing = try await requireSharingPolicy()
+        // The per-calendar write policy is keyed by EventKit identifiers, so
+        // resolving it requires the same calendar visibility as a read. Under
+        // write-only authorization EventKit cannot enumerate those calendars.
+        try await ensureReadAccess()
 
-        let calendar = try targetCalendar(named: request.calendarName)
+        let calendars = try currentSharedCalendars(sharing: sharing)
+        let calendar = try targetCalendar(
+            identifier: request.calendarIdentifier,
+            named: request.calendarName,
+            from: calendars
+        )
         let interval = try request.dateInterval(in: .current)
 
         let event = EKEvent(eventStore: store)
@@ -528,57 +709,166 @@ actor CalendarService {
         }
     }
 
-    private func ensureWriteAccess() async throws {
-        switch authorizationState() {
-        case .fullAccess, .writeOnly:
-            return
-        case .notDetermined:
-            let updatedState = try await requestAccessIfNeeded()
-            guard updatedState == .fullAccess || updatedState == .writeOnly else {
-                throw CalendarServiceError.accessDenied
-            }
-        case .denied:
-            throw CalendarServiceError.accessDenied
-        case .restricted:
-            throw CalendarServiceError.restricted
-        case .unknown:
-            throw CalendarServiceError.accessDenied
+    private func requireSharingPolicy() async throws -> CalendarSharingSnapshot {
+        let sharing = await sharingPreferences.snapshot()
+        guard sharing.isEnabled else {
+            throw CalendarServiceError.sharingDisabled
         }
+        guard !sharing.sharedCalendarIdentifiers.isEmpty else {
+            throw CalendarServiceError.noSharedCalendars
+        }
+        return sharing
     }
 
-    private func targetCalendar(named name: String?) throws -> EKCalendar {
-        if let trimmed = Self.normalizedOrNil(name) {
+    private func currentSharedCalendars(
+        sharing: CalendarSharingSnapshot
+    ) throws -> [EKCalendar] {
+        let calendars = store.calendars(for: .event)
+        let candidates = try Self.sharedCalendarCandidates(
+            available: Self.selectionCandidates(for: calendars),
+            sharedIdentifiers: sharing.sharedCalendarIdentifiers
+        )
+        return Self.calendars(matching: candidates, from: calendars)
+    }
+
+    private func targetCalendar(
+        identifier: String?,
+        named name: String?,
+        from calendars: [EKCalendar]
+    ) throws -> EKCalendar {
+        let candidate = try Self.targetCalendarCandidate(
+            identifier: identifier,
+            named: name,
+            defaultIdentifier: store.defaultCalendarForNewEvents?.calendarIdentifier,
+            from: Self.selectionCandidates(for: calendars)
+        )
+        guard let calendar = calendars.first(where: {
+            $0.calendarIdentifier == candidate.identifier
+        }) else {
+            throw CalendarServiceError.noWritableCalendar
+        }
+        return calendar
+    }
+
+    private func selectedCalendars(
+        identifiers: [String],
+        names: [String],
+        from calendars: [EKCalendar]
+    ) throws -> [EKCalendar] {
+        let candidates = try Self.selectedCalendarCandidates(
+            identifiers: identifiers,
+            names: names,
+            from: Self.selectionCandidates(for: calendars)
+        )
+        return Self.calendars(matching: candidates, from: calendars)
+    }
+
+    nonisolated static func sharedCalendarCandidates(
+        available: [CalendarSelectionCandidate],
+        sharedIdentifiers: Set<String>
+    ) throws -> [CalendarSelectionCandidate] {
+        let calendars = available.filter {
+            sharedIdentifiers.contains($0.identifier)
+        }
+        guard !calendars.isEmpty else {
+            throw CalendarServiceError.noSharedCalendars
+        }
+        return calendars
+    }
+
+    nonisolated static func targetCalendarCandidate(
+        identifier: String?,
+        named name: String?,
+        defaultIdentifier: String?,
+        from calendars: [CalendarSelectionCandidate]
+    ) throws -> CalendarSelectionCandidate {
+        if let identifier = normalizedOrNil(identifier) {
+            if let match = calendars.first(where: { $0.identifier == identifier }) {
+                return match
+            }
+            throw CalendarServiceError.noMatchingCalendars([identifier])
+        }
+
+        if let trimmed = normalizedOrNil(name) {
             let normalized = trimmed.lowercased()
-            if let match = store.calendars(for: .event).first(where: { $0.title.lowercased() == normalized }) {
+            if let match = calendars.first(where: { $0.name.lowercased() == normalized }) {
                 return match
             }
             throw CalendarServiceError.noMatchingCalendars([trimmed])
         }
 
-        guard let defaultCalendar = store.defaultCalendarForNewEvents else {
+        guard let defaultIdentifier,
+              let defaultCalendar = calendars.first(where: {
+                  $0.identifier == defaultIdentifier
+              }) else {
             throw CalendarServiceError.noWritableCalendar
         }
         return defaultCalendar
     }
 
-    private func selectedCalendars(named names: [String]) throws -> [EKCalendar]? {
+    nonisolated static func selectedCalendarCandidates(
+        identifiers: [String],
+        names: [String],
+        from calendars: [CalendarSelectionCandidate]
+    ) throws -> [CalendarSelectionCandidate] {
+        let normalizedIdentifiers = identifiers
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        if !normalizedIdentifiers.isEmpty {
+            let requested = Set(normalizedIdentifiers)
+            let matches = calendars.filter {
+                requested.contains($0.identifier)
+            }
+            let matched = Set(matches.map(\.identifier))
+            let missing = requested.subtracting(matched).sorted()
+            guard missing.isEmpty else {
+                throw CalendarServiceError.noMatchingCalendars(missing)
+            }
+            return matches
+        }
+
         let normalizedNames = names
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
             .filter { !$0.isEmpty }
 
         guard !normalizedNames.isEmpty else {
-            return nil
+            return calendars
         }
 
-        let matches = store.calendars(for: .event).filter { calendar in
-            normalizedNames.contains(calendar.title.lowercased())
+        let requested = Set(normalizedNames)
+        let matches = calendars.filter { calendar in
+            requested.contains(calendar.name.lowercased())
         }
 
-        guard !matches.isEmpty else {
-            throw CalendarServiceError.noMatchingCalendars(names)
+        let matched = Set(matches.map { $0.name.lowercased() })
+        let missing = requested.subtracting(matched).sorted()
+        guard missing.isEmpty else {
+            throw CalendarServiceError.noMatchingCalendars(missing)
         }
 
         return matches
+    }
+
+    private static func selectionCandidates(
+        for calendars: [EKCalendar]
+    ) -> [CalendarSelectionCandidate] {
+        calendars.map {
+            CalendarSelectionCandidate(
+                identifier: $0.calendarIdentifier,
+                name: $0.title
+            )
+        }
+    }
+
+    private static func calendars(
+        matching candidates: [CalendarSelectionCandidate],
+        from calendars: [EKCalendar]
+    ) -> [EKCalendar] {
+        let identifiers = Set(candidates.map(\.identifier))
+        return calendars.filter {
+            identifiers.contains($0.calendarIdentifier)
+        }
     }
 
     private func makeSummary(event: EKEvent) -> CalendarEventSummary {
@@ -586,9 +876,11 @@ actor CalendarService {
         // that has not been filed yet, so read it defensively rather than
         // trapping on a shape the type system claims cannot happen.
         let calendarTitle = Self.normalizedOrNil(event.calendar?.title) ?? "(unknown calendar)"
+        let calendarIdentifier = event.calendar?.calendarIdentifier ?? ""
         let common = (
             title: Self.normalizedOrNil(event.title) ?? "(untitled event)",
             calendar: calendarTitle,
+            calendarIdentifier: calendarIdentifier,
             location: Self.normalizedOrNil(event.location),
             notes: Self.truncateNotes(event.notes),
             url: event.url?.absoluteString
@@ -607,6 +899,7 @@ actor CalendarService {
             return CalendarEventSummary(
                 title: common.title,
                 calendar: common.calendar,
+                calendarIdentifier: common.calendarIdentifier,
                 start: CalendarEventTimestamps.date(event.startDate, in: zone),
                 end: CalendarEventTimestamps.date(lastDay, in: zone),
                 allDay: true,
@@ -621,6 +914,7 @@ actor CalendarService {
         return CalendarEventSummary(
             title: common.title,
             calendar: common.calendar,
+            calendarIdentifier: common.calendarIdentifier,
             start: CalendarEventTimestamps.timestamp(event.startDate, in: zone),
             end: CalendarEventTimestamps.timestamp(event.endDate, in: zone),
             allDay: false,
@@ -643,7 +937,103 @@ actor CalendarService {
         event.timeZone ?? .current
     }
 
-    private static func normalizedOrNil(_ value: String?) -> String? {
+    private func metadata(
+        for calendars: [EKCalendar],
+        sharing: CalendarSharingSnapshot
+    ) -> [CalendarMetadata] {
+        let defaultIdentifier = store.defaultCalendarForNewEvents?.calendarIdentifier
+        return calendars.map { calendar in
+            let source: CalendarSourceMetadata
+            if let eventSource = calendar.source {
+                source = CalendarSourceMetadata(
+                    identifier: eventSource.sourceIdentifier,
+                    title: Self.normalizedOrNil(eventSource.title) ?? "(unnamed source)",
+                    type: Self.sourceTypeName(eventSource.sourceType),
+                    isDelegate: eventSource.isDelegate
+                )
+            } else {
+                source = CalendarSourceMetadata(
+                    identifier: "",
+                    title: "(unknown source)",
+                    type: "unknown",
+                    isDelegate: false
+                )
+            }
+
+            return CalendarMetadata(
+                calendarIdentifier: calendar.calendarIdentifier,
+                title: Self.normalizedOrNil(calendar.title) ?? "(untitled calendar)",
+                description: sharing.description(for: calendar.calendarIdentifier),
+                source: source,
+                type: Self.calendarTypeName(calendar.type),
+                allowsContentModifications: calendar.allowsContentModifications,
+                isSubscribed: calendar.isSubscribed,
+                isImmutable: calendar.isImmutable,
+                color: Self.colorHex(calendar.color),
+                supportedAvailability: Self.supportedAvailabilityNames(
+                    calendar.supportedEventAvailabilities
+                ),
+                isDefault: calendar.calendarIdentifier == defaultIdentifier
+            )
+        }
+        .sorted {
+            let sourceOrder = $0.source.title.localizedCaseInsensitiveCompare($1.source.title)
+            if sourceOrder != .orderedSame {
+                return sourceOrder == .orderedAscending
+            }
+            let titleOrder = $0.title.localizedCaseInsensitiveCompare($1.title)
+            if titleOrder != .orderedSame {
+                return titleOrder == .orderedAscending
+            }
+            return $0.calendarIdentifier < $1.calendarIdentifier
+        }
+    }
+
+    private static func calendarTypeName(_ type: EKCalendarType) -> String {
+        switch type {
+        case .local: "local"
+        case .calDAV: "caldav"
+        case .exchange: "exchange"
+        case .subscription: "subscription"
+        case .birthday: "birthday"
+        @unknown default: "unknown"
+        }
+    }
+
+    private static func sourceTypeName(_ type: EKSourceType) -> String {
+        switch type {
+        case .local: "local"
+        case .exchange: "exchange"
+        case .calDAV: "caldav"
+        case .mobileMe: "mobileme"
+        case .subscribed: "subscribed"
+        case .birthdays: "birthdays"
+        @unknown default: "unknown"
+        }
+    }
+
+    private static func supportedAvailabilityNames(
+        _ mask: EKCalendarEventAvailabilityMask
+    ) -> [String] {
+        var values: [String] = []
+        if mask.contains(.busy) { values.append("busy") }
+        if mask.contains(.free) { values.append("free") }
+        if mask.contains(.tentative) { values.append("tentative") }
+        if mask.contains(.unavailable) { values.append("unavailable") }
+        return values
+    }
+
+    private static func colorHex(_ color: NSColor?) -> String? {
+        guard let color = color?.usingColorSpace(.sRGB) else {
+            return nil
+        }
+        let red = Int((color.redComponent * 255).rounded())
+        let green = Int((color.greenComponent * 255).rounded())
+        let blue = Int((color.blueComponent * 255).rounded())
+        return String(format: "#%02X%02X%02X", red, green, blue)
+    }
+
+    nonisolated static func normalizedOrNil(_ value: String?) -> String? {
         guard let value else {
             return nil
         }
@@ -677,21 +1067,35 @@ actor CalendarService {
 }
 
 struct CalendarPlatformHandler: PlatformServiceHandler {
-    let version = "1"
-    let supportedMethods = ["list_events", "create_event"]
+    let version = "2"
+    let supportedMethods = ["list_calendars", "list_events", "create_event"]
 
-    // Only the read tool (list_events) is authored. create_event stays a
-    // supported method but is intentionally not exposed as an LLM tool until
-    // the operator read/write policy lands; advertising no write tool is how
-    // a read-only posture is enforced. The tool keeps the established
+    // Only read tools are authored. create_event stays a supported method but
+    // is intentionally not exposed as an LLM tool until the operator read/write
+    // policy lands; advertising no write tool is how a read-only posture is
+    // enforced. The event tool keeps the established
     // macos_calendar_events name so it shadows the server's legacy hand-coded
     // tool (and inherits its prose result formatting) rather than adding a
     // second calendar tool.
     let toolDefinitions: [PlatformToolDefinition] = [
         .make(
+            name: "macos_calendars_list",
+            description: "List the macOS calendars the operator explicitly shares with Thane, including exact local identifiers, operator-authored descriptions, source/account, type, color, and modification capabilities. Use this before choosing calendar scope when the operator's intent matters.",
+            method: "list_calendars",
+            tags: ["macos", "calendar", "read"],
+            schemaJSON: """
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {}
+            }
+            """
+        ),
+        .make(
             name: "macos_calendar_events",
-            description: "List events from the user's macOS Calendar within a time window. Served by a connected macOS companion app.",
+            description: "List events from calendars the operator explicitly shares in the macOS companion app. Use macos_calendars_list first when calendar scope or operator-authored descriptions matter.",
             method: "list_events",
+            tags: ["macos", "calendar", "read"],
             schemaJSON: """
             {
               "type": "object",
@@ -707,7 +1111,12 @@ struct CalendarPlatformHandler: PlatformServiceHandler {
                 "calendar_names": {
                   "type": "array",
                   "items": {"type": "string"},
-                  "description": "Calendar display names to include. Omit for all calendars."
+                  "description": "Shared calendar display names to include. Omit for every calendar the operator selected. Prefer calendar_ids when names may be duplicated."
+                },
+                "calendar_ids": {
+                  "type": "array",
+                  "items": {"type": "string"},
+                  "description": "Exact shared calendar identifiers returned by macos_calendars_list. Takes precedence over calendar_names when present."
                 },
                 "query": {
                   "type": "string",
@@ -734,6 +1143,8 @@ struct CalendarPlatformHandler: PlatformServiceHandler {
 
     func handle(method: String, params: [String: AnyCodable]) async throws -> AnyCodable {
         switch method {
+        case "list_calendars":
+            return try AnyCodable.fromEncodable(try await calendarService.listSharedCalendars())
         case "list_events":
             let request = try decodePlatformParams(CalendarListRequest.self, from: params)
             return try AnyCodable.fromEncodable(try await calendarService.listEvents(request: request))

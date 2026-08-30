@@ -74,6 +74,7 @@ struct PlatformCalendarTests {
         let request = try decodePlatformParams(CalendarListRequest.self, from: params)
 
         #expect(request.calendarNames == nil)
+        #expect(request.calendarIdentifiers == nil)
         #expect(request.query == nil)
         #expect(request.limit == nil)
 
@@ -88,6 +89,7 @@ struct PlatformCalendarTests {
             "start": AnyCodable("2026-04-02T12:00:00Z"),
             "end": AnyCodable("2026-04-02T13:00:00Z"),
             "calendar_names": AnyCodable(["Work", "Home"]),
+            "calendar_ids": AnyCodable(["calendar-work", "calendar-home"]),
             "query": AnyCodable("standup"),
             "limit": AnyCodable(5),
         ]
@@ -95,6 +97,7 @@ struct PlatformCalendarTests {
         let request = try decodePlatformParams(CalendarListRequest.self, from: params)
 
         #expect(request.calendarNames == ["Work", "Home"])
+        #expect(request.calendarIdentifiers == ["calendar-work", "calendar-home"])
         #expect(request.query == "standup")
         #expect(request.limit == 5)
     }
@@ -102,7 +105,7 @@ struct PlatformCalendarTests {
     @Test
     func createEventRequestDecodesFromParams() throws {
         let json = Data(#"""
-        {"title":"Dentist","calendar_name":"Personal","start":"2026-04-02T09:00:00Z","end":"2026-04-02T10:00:00Z","all_day":false,"location":"Downtown","notes":"bring forms","url":"https://example.com"}
+        {"title":"Dentist","calendar_name":"Personal","calendar_id":"calendar-personal","start":"2026-04-02T09:00:00Z","end":"2026-04-02T10:00:00Z","all_day":false,"location":"Downtown","notes":"bring forms","url":"https://example.com"}
         """#.utf8)
         let params = try JSONDecoder().decode([String: AnyCodable].self, from: json)
 
@@ -110,6 +113,7 @@ struct PlatformCalendarTests {
 
         #expect(request.title == "Dentist")
         #expect(request.calendarName == "Personal")
+        #expect(request.calendarIdentifier == "calendar-personal")
         #expect(request.allDay == false)
         #expect(request.location == "Downtown")
         #expect(request.notes == "bring forms")
@@ -127,6 +131,7 @@ struct PlatformCalendarTests {
         let request = try decodePlatformParams(CalendarCreateEventRequest.self, from: params)
 
         #expect(request.calendarName == nil)
+        #expect(request.calendarIdentifier == nil)
         #expect(request.allDay == nil)
         #expect(request.location == nil)
         #expect(request.notes == nil)
@@ -158,9 +163,140 @@ struct PlatformCalendarTests {
 
     @Test
     @MainActor
-    func calendarHandlerSupportsListAndCreate() {
-        let handler = CalendarPlatformHandler(calendarService: CalendarService())
-        #expect(handler.supportedMethods == ["list_events", "create_event"])
+    func calendarHandlerSupportsCatalogListAndCreate() throws {
+        let suiteName = "PlatformCalendarTests.\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let handler = CalendarPlatformHandler(
+            calendarService: CalendarService(
+                sharingPreferences: CalendarSharingPreferences(defaults: defaults)
+            )
+        )
+        #expect(handler.supportedMethods == ["list_calendars", "list_events", "create_event"])
+    }
+}
+
+/// The allowlist is the security boundary for both reads and writes. These
+/// tests exercise policy selection without requiring access to the operator's
+/// real EventKit store.
+struct CalendarSelectionPolicyTests {
+    private static let work = CalendarSelectionCandidate(
+        identifier: "calendar-work",
+        name: "Work"
+    )
+    private static let personal = CalendarSelectionCandidate(
+        identifier: "calendar-personal",
+        name: "Personal"
+    )
+
+    @Test
+    func omittedFiltersReturnOnlySharedCalendars() throws {
+        let shared = try CalendarService.sharedCalendarCandidates(
+            available: [Self.work, Self.personal],
+            sharedIdentifiers: [Self.work.identifier]
+        )
+
+        let selected = try CalendarService.selectedCalendarCandidates(
+            identifiers: [],
+            names: [],
+            from: shared
+        )
+
+        #expect(selected == [Self.work])
+    }
+
+    @Test
+    func exactIdentifierCannotSelectAnUnsharedCalendar() throws {
+        let shared = try CalendarService.sharedCalendarCandidates(
+            available: [Self.work, Self.personal],
+            sharedIdentifiers: [Self.work.identifier]
+        )
+
+        do {
+            _ = try CalendarService.selectedCalendarCandidates(
+                identifiers: [Self.personal.identifier],
+                names: [],
+                from: shared
+            )
+            Issue.record("Expected an unshared calendar identifier to be rejected.")
+        } catch let error as CalendarServiceError {
+            #expect(error.code == "calendar_not_found")
+        } catch {
+            Issue.record("Expected calendar_not_found, got \(error.localizedDescription)")
+        }
+    }
+
+    @Test
+    func mixedValidAndUnknownIdentifiersFailClosed() {
+        do {
+            _ = try CalendarService.selectedCalendarCandidates(
+                identifiers: [Self.work.identifier, "calendar-missing"],
+                names: [],
+                from: [Self.work]
+            )
+            Issue.record("Expected a mixed valid and unknown selection to be rejected.")
+        } catch let error as CalendarServiceError {
+            #expect(error.code == "calendar_not_found")
+            #expect(error.errorDescription?.contains("calendar-missing") == true)
+        } catch {
+            Issue.record("Expected calendar_not_found, got \(error.localizedDescription)")
+        }
+    }
+
+    @Test
+    func staleSharedIdentifiersAreExcluded() throws {
+        let shared = try CalendarService.sharedCalendarCandidates(
+            available: [Self.work, Self.personal],
+            sharedIdentifiers: [Self.work.identifier, "calendar-stale"]
+        )
+
+        #expect(shared == [Self.work])
+    }
+
+    @Test
+    func targetCalendarRejectsAnUnsharedIdentifier() {
+        do {
+            _ = try CalendarService.targetCalendarCandidate(
+                identifier: Self.personal.identifier,
+                named: nil,
+                defaultIdentifier: nil,
+                from: [Self.work]
+            )
+            Issue.record("Expected an unshared target identifier to be rejected.")
+        } catch let error as CalendarServiceError {
+            #expect(error.code == "calendar_not_found")
+        } catch {
+            Issue.record("Expected calendar_not_found, got \(error.localizedDescription)")
+        }
+    }
+
+    @Test
+    func targetIdentifierTakesPrecedenceOverName() throws {
+        let selected = try CalendarService.targetCalendarCandidate(
+            identifier: Self.personal.identifier,
+            named: Self.work.name,
+            defaultIdentifier: nil,
+            from: [Self.work, Self.personal]
+        )
+
+        #expect(selected == Self.personal)
+    }
+
+    @Test
+    func unsharedDefaultCalendarIsRejected() {
+        do {
+            _ = try CalendarService.targetCalendarCandidate(
+                identifier: nil,
+                named: nil,
+                defaultIdentifier: Self.personal.identifier,
+                from: [Self.work]
+            )
+            Issue.record("Expected an unshared default calendar to be rejected.")
+        } catch let error as CalendarServiceError {
+            #expect(error.code == "calendar_no_writable_calendar")
+        } catch {
+            Issue.record("Expected calendar_no_writable_calendar, got \(error.localizedDescription)")
+        }
     }
 }
 
@@ -183,6 +319,7 @@ struct PlatformCalendarWireTests {
         let zoned = CalendarEventSummary(
             title: "Berlin kickoff",
             calendar: "Work",
+            calendarIdentifier: "calendar-work",
             start: "2026-09-02T10:00:00+02:00",
             end: "2026-09-02T11:30:00+02:00",
             allDay: false,
@@ -193,12 +330,14 @@ struct PlatformCalendarWireTests {
         )
         let zonedJSON = String(decoding: try JSONEncoder().encode(zoned), as: UTF8.self)
         #expect(zonedJSON.contains("\"time_zone\":\"Europe\\/Berlin\""))
+        #expect(zonedJSON.contains("\"calendar_id\":\"calendar-work\""))
 
         // A floating event declares nothing, and the key must be absent
         // rather than null so the far side can tell "no zone" from "UTC".
         let floating = CalendarEventSummary(
             title: "Focus block",
             calendar: "Work",
+            calendarIdentifier: "calendar-work",
             start: "2026-09-02T10:00:00-05:00",
             end: "2026-09-02T11:00:00-05:00",
             allDay: false,
@@ -217,6 +356,7 @@ struct PlatformCalendarWireTests {
         let original = CalendarEventSummary(
             title: "Conference",
             calendar: "Work",
+            calendarIdentifier: "calendar-work",
             start: "2026-09-02",
             end: "2026-09-04",
             allDay: true,
@@ -232,6 +372,44 @@ struct PlatformCalendarWireTests {
         )
 
         #expect(decoded == original)
+    }
+
+    @Test
+    func calendarCatalogCarriesOperatorContextAndSystemMetadata() throws {
+        let response = CalendarCatalogResponse(
+            calendars: [
+                CalendarMetadata(
+                    calendarIdentifier: "calendar-work",
+                    title: "Work",
+                    description: "Client commitments and deadlines.",
+                    source: CalendarSourceMetadata(
+                        identifier: "source-icloud",
+                        title: "iCloud",
+                        type: "caldav",
+                        isDelegate: false
+                    ),
+                    type: "caldav",
+                    allowsContentModifications: true,
+                    isSubscribed: false,
+                    isImmutable: false,
+                    color: "#4A90E2",
+                    supportedAvailability: ["busy", "free"],
+                    isDefault: true
+                ),
+            ]
+        )
+
+        let data = try JSONEncoder().encode(response)
+        let object = try #require(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let calendars = try #require(object["calendars"] as? [[String: Any]])
+        let calendar = try #require(calendars.first)
+        #expect(calendar["calendar_id"] as? String == "calendar-work")
+        #expect(calendar["description"] as? String == "Client commitments and deadlines.")
+        #expect(calendar["allows_content_modifications"] as? Bool == true)
+        #expect(calendar["supported_availability"] as? [String] == ["busy", "free"])
+        #expect((calendar["source"] as? [String: Any])?["title"] as? String == "iCloud")
     }
 
     @Test

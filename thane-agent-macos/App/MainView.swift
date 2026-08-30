@@ -55,7 +55,12 @@ struct MainView: View {
                 openWindow(id: "process-health")
             }
             appState.openDashboardWindow = { openWindow(id: "dashboard") }
-            appState.activateSelectedConfiguration(advancedConfig: defaultConfigs.first)
+            // The unit-test bundle is injected into the application process.
+            // Do not activate the operator's persisted server in that host:
+            // it would read the real Keychain before any test can begin.
+            if ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil {
+                appState.activateSelectedConfiguration(advancedConfig: defaultConfigs.first)
+            }
         }
     }
 
