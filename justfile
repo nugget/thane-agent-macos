@@ -23,7 +23,7 @@ default:
     @echo "Common workflows:"
     @echo "    just ci                                                   # full local gate (build + test) — run before pushing"
     @echo "    just release-github <version> [auto|prerelease|release]   # cut a release (DMG, notarize, GitHub)"
-    @echo "    just deploy-macos <user@host>                             # build, notarize, and deploy the app to a macOS host"
+    @echo "    just deploy-macos <user@host>...                          # build, notarize, and deploy the app to macOS hosts"
     @echo ""
     @just --list
 
@@ -422,28 +422,33 @@ release-github version release_kind="auto":
 
 # --- Deploy ---
 
-[doc("Build, notarize, and deploy the app to a remote macOS host (takes user@host); prints the deployed version")]
+[arg("deploy_path", long="deploy-path")]
+[doc("Build and notarize once, then deploy the app to one or more user@host targets")]
 [group('deploy')]
-deploy-macos host deploy_path=deploy-path: notarize-app
+[positional-arguments]
+deploy-macos deploy_path=deploy-path +hosts: notarize-app
     #!/usr/bin/env bash
     set -euo pipefail
-    host="{{host}}"
+    deploy_path="$1"
+    shift
+    hosts=("$@")
     app="{{app}}"
-    deploy_path="{{deploy_path}}"
     build_dir="{{build-dir}}"
     version="$(just describe)"
 
-    echo "Stopping ${app} on ${host}..."
-    ssh "$host" "pkill -x '${app}' 2>/dev/null || true"
-    sleep 2
+    for host in "${hosts[@]}"; do
+        echo "Stopping ${app} on ${host}..."
+        ssh "$host" "pkill -x '${app}' 2>/dev/null || true"
+        sleep 2
 
-    echo "Deploying to ${host}:~/${deploy_path}/${app}.app..."
-    ssh "$host" "mkdir -p '${deploy_path}' && rm -rf '${deploy_path}/${app}.app'"
-    rsync -av \
-        "${build_dir}/export/${app}.app" \
-        "${host}:${deploy_path}/"
+        echo "Deploying to ${host}:~/${deploy_path}/${app}.app..."
+        ssh "$host" "mkdir -p '${deploy_path}' && rm -rf '${deploy_path}/${app}.app'"
+        rsync -av \
+            "${build_dir}/export/${app}.app" \
+            "${host}:${deploy_path}/"
 
-    echo "Starting ${app} on ${host}..."
-    ssh "$host" "open '${deploy_path}/${app}.app'"
+        echo "Starting ${app} on ${host}..."
+        ssh "$host" "open '${deploy_path}/${app}.app'"
 
-    echo "Deployed version: ${version} -> ${host}"
+        echo "Deployed version: ${version} -> ${host}"
+    done
