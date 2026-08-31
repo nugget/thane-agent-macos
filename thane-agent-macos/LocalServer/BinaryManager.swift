@@ -121,6 +121,59 @@ nonisolated struct LocalThaneConfig: Sendable {
     }
 }
 
+/// Holds an explicit restart request until the managed child actually exits.
+///
+/// Graceful shutdown can include checkpointing and other durable cleanup, so
+/// elapsed time is not evidence that the old process is gone. The gate keeps
+/// that timing concern out of `BinaryManager`: a running child is signalled,
+/// and its termination callback consumes the pending request.
+nonisolated struct ProcessRestartGate: Sendable {
+    private(set) var isPending = false
+
+    /// Returns true when there is no running process and the caller can start
+    /// immediately. Otherwise records work for the termination callback.
+    mutating func request(processIsRunning: Bool) -> Bool {
+        guard processIsRunning else { return true }
+        isPending = true
+        return false
+    }
+
+    mutating func cancel() {
+        isPending = false
+    }
+
+    /// Consume the request after termination. Only an intentional, clean stop
+    /// with the operator's run intent still set should restart immediately.
+    mutating func consumeAfterTermination(isClean: Bool, shouldRun: Bool) -> Bool {
+        defer { isPending = false }
+        return isPending && isClean && shouldRun
+    }
+}
+
+/// Monotonic deadline for waiting on managed-process shutdown.
+nonisolated struct ProcessShutdownDeadline: Sendable {
+    private let expiresAt: ContinuousClock.Instant
+
+    init(startedAt: ContinuousClock.Instant, timeout: Duration) {
+        expiresAt = startedAt.advanced(by: timeout)
+    }
+
+    func hasExpired(at instant: ContinuousClock.Instant) -> Bool {
+        instant >= expiresAt
+    }
+}
+
+nonisolated enum BinaryMaintenanceError: LocalizedError {
+    case shutdownTimedOut
+
+    var errorDescription: String? {
+        switch self {
+        case .shutdownTimedOut:
+            "Thane did not stop within 60 seconds. The update was cancelled without replacing the running binary."
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class BinaryManager {
@@ -128,6 +181,7 @@ final class BinaryManager {
     // MARK: - State
 
     nonisolated private static let maxPendingLogCharacters = 65_536
+    nonisolated private static let maintenanceShutdownTimeout: Duration = .seconds(60)
 
     enum State: Equatable {
         case notConfigured      // no binary found or set
@@ -558,6 +612,7 @@ final class BinaryManager {
     private var binaryWatchDebounce: Task<Void, Never>?
     private var lastKnownBinaryMtime: Date?
     private var isPerformingMaintenance = false
+    private var processRestartGate = ProcessRestartGate()
     private var restartAttempt = 0
     private var recentCrashTimestamps: [Date] = []
     private let logger = Logger(subsystem: "info.nugget.thane-agent-macos", category: "binary")
@@ -781,6 +836,7 @@ final class BinaryManager {
     }
 
     func stop() {
+        processRestartGate.cancel()
         shouldRun = false
         startTask?.cancel()
         startTask = nil
@@ -799,6 +855,7 @@ final class BinaryManager {
     /// exits, while preserving `shouldRun` so launch-at-login can restore the
     /// operator's intent next time.
     func prepareForApplicationTermination() {
+        processRestartGate.cancel()
         startTask?.cancel()
         restartTask?.cancel()
         statsTask?.cancel()
@@ -806,17 +863,19 @@ final class BinaryManager {
     }
 
     func restart() {
-        if state.isRunning {
-            // terminationHandler will not auto-restart; we trigger manually after stop.
-            Task {
-                stop()
-                // Give the process a moment to exit cleanly.
-                try? await Task.sleep(for: .milliseconds(500))
-                start()
-            }
-        } else {
+        if processRestartGate.request(processIsRunning: state.isRunning) {
             start()
+            return
         }
+
+        // Preserve the operator's run intent while graceful shutdown finishes.
+        // handleTermination starts the replacement only after the old process
+        // has actually exited, however long its checkpoint and cleanup take.
+        shouldRun = true
+        restartTask?.cancel()
+        restartTask = nil
+        append("Stopping thane before restart…", level: .info)
+        process?.terminate()
     }
 
     var canInitializeWorkspace: Bool {
@@ -916,11 +975,34 @@ final class BinaryManager {
         let previousShouldRun = shouldRun
         if state.isRunning { stop() }
 
-        // Wait for process to exit
-        var waitIterations = 0
-        while state.isRunning && waitIterations < 50 {
-            try await Task.sleep(for: .milliseconds(100))
-            waitIterations += 1
+        // Never replace the executable while its supervised process is still
+        // shutting down. Allow normal durable cleanup substantially longer
+        // than the old five-second cap, but abort instead of wedging the
+        // updater forever if the child ignores SIGTERM or deadlocks.
+        let clock = ContinuousClock()
+        let deadline = ProcessShutdownDeadline(
+            startedAt: clock.now,
+            timeout: Self.maintenanceShutdownTimeout
+        )
+        do {
+            while state.isRunning {
+                if deadline.hasExpired(at: clock.now) {
+                    throw BinaryMaintenanceError.shutdownTimedOut
+                }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        } catch {
+            // The install action has not run, so timeout or cancellation must
+            // restore the prior run intent. If shutdown completes later, the
+            // normal termination callback starts the unchanged binary.
+            if previousShouldRun {
+                if state.isRunning {
+                    restart()
+                } else {
+                    start()
+                }
+            }
+            throw error
         }
 
         try action()
@@ -1042,6 +1124,10 @@ final class BinaryManager {
         startedAt = nil
 
         let clean = (code == 0 || code == SIGTERM)
+        let restartImmediately = processRestartGate.consumeAfterTermination(
+            isClean: clean,
+            shouldRun: shouldRun
+        )
         if clean {
             recentCrashTimestamps.removeAll()
             recentCrashCount = 0
@@ -1068,7 +1154,10 @@ final class BinaryManager {
             logger.error("thane crashed, exit code \(code)")
         }
 
-        if !clean && code != ThaneInvocation.terminalExitCode && shouldRun {
+        if restartImmediately {
+            logger.info("Managed process stopped; starting the requested replacement")
+            start()
+        } else if !clean && code != ThaneInvocation.terminalExitCode && shouldRun {
             scheduleRestart()
         }
     }
