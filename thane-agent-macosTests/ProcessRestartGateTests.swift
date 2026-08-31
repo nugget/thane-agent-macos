@@ -71,4 +71,26 @@ struct ProcessRestartGateTests {
         #expect(restartAfterTermination == false)
         #expect(gate.isPending == false)
     }
+
+    @Test
+    func maintenanceShutdownDeadlineIsBoundedAtItsExactLimit() {
+        let clock = ContinuousClock()
+        let startedAt = clock.now
+        let deadline = ProcessShutdownDeadline(
+            startedAt: startedAt,
+            timeout: .seconds(60)
+        )
+
+        #expect(deadline.hasExpired(at: startedAt) == false)
+        #expect(deadline.hasExpired(at: startedAt.advanced(by: .milliseconds(59_999))) == false)
+        #expect(deadline.hasExpired(at: startedAt.advanced(by: .seconds(60))))
+    }
+
+    @Test
+    func maintenanceTimeoutExplainsThatTheRunningBinaryWasNotReplaced() {
+        #expect(
+            BinaryMaintenanceError.shutdownTimedOut.errorDescription
+                == "Thane did not stop within 60 seconds. The update was cancelled without replacing the running binary."
+        )
+    }
 }

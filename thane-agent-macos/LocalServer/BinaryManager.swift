@@ -150,6 +150,30 @@ nonisolated struct ProcessRestartGate: Sendable {
     }
 }
 
+/// Monotonic deadline for waiting on managed-process shutdown.
+nonisolated struct ProcessShutdownDeadline: Sendable {
+    private let expiresAt: ContinuousClock.Instant
+
+    init(startedAt: ContinuousClock.Instant, timeout: Duration) {
+        expiresAt = startedAt.advanced(by: timeout)
+    }
+
+    func hasExpired(at instant: ContinuousClock.Instant) -> Bool {
+        instant >= expiresAt
+    }
+}
+
+nonisolated enum BinaryMaintenanceError: LocalizedError {
+    case shutdownTimedOut
+
+    var errorDescription: String? {
+        switch self {
+        case .shutdownTimedOut:
+            "Thane did not stop within 60 seconds. The update was cancelled without replacing the running binary."
+        }
+    }
+}
+
 @Observable
 @MainActor
 final class BinaryManager {
@@ -157,6 +181,7 @@ final class BinaryManager {
     // MARK: - State
 
     nonisolated private static let maxPendingLogCharacters = 65_536
+    nonisolated private static let maintenanceShutdownTimeout: Duration = .seconds(60)
 
     enum State: Equatable {
         case notConfigured      // no binary found or set
@@ -951,10 +976,33 @@ final class BinaryManager {
         if state.isRunning { stop() }
 
         // Never replace the executable while its supervised process is still
-        // shutting down. Graceful checkpointing can legitimately exceed the
-        // old five-second cap.
-        while state.isRunning {
-            try await Task.sleep(for: .milliseconds(100))
+        // shutting down. Allow normal durable cleanup substantially longer
+        // than the old five-second cap, but abort instead of wedging the
+        // updater forever if the child ignores SIGTERM or deadlocks.
+        let clock = ContinuousClock()
+        let deadline = ProcessShutdownDeadline(
+            startedAt: clock.now,
+            timeout: Self.maintenanceShutdownTimeout
+        )
+        do {
+            while state.isRunning {
+                if deadline.hasExpired(at: clock.now) {
+                    throw BinaryMaintenanceError.shutdownTimedOut
+                }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        } catch {
+            // The install action has not run, so timeout or cancellation must
+            // restore the prior run intent. If shutdown completes later, the
+            // normal termination callback starts the unchanged binary.
+            if previousShouldRun {
+                if state.isRunning {
+                    restart()
+                } else {
+                    start()
+                }
+            }
+            throw error
         }
 
         try action()
