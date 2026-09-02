@@ -6,6 +6,36 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		F24B5E312F7D6055006E2150 /* thane-portbroker in Embed Port Broker */ = {isa = PBXBuildFile; fileRef = F24B5E012F7D6055006E2150 /* thane-portbroker */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		F24B5E052F7D6055006E2150 /* info.nugget.thane-agent-macos.portbroker.plist in Embed LaunchDaemon */ = {isa = PBXBuildFile; fileRef = F24B5E042F7D6055006E2150 /* info.nugget.thane-agent-macos.portbroker.plist */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		F24B5E302F7D6055006E2150 /* Embed Port Broker */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 6;
+			files = (
+				F24B5E312F7D6055006E2150 /* thane-portbroker in Embed Port Broker */,
+			);
+			name = "Embed Port Broker";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F24B5E322F7D6055006E2150 /* Embed LaunchDaemon */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "Contents/Library/LaunchDaemons";
+			dstSubfolderSpec = 1;
+			files = (
+				F24B5E052F7D6055006E2150 /* info.nugget.thane-agent-macos.portbroker.plist in Embed LaunchDaemon */,
+			);
+			name = "Embed LaunchDaemon";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXContainerItemProxy section */
 		F24B5D932F7D6055006E2150 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -21,12 +51,21 @@
 			remoteGlobalIDString = F24B5D822F7D6054006E2150;
 			remoteInfo = "thane-agent-macos";
 		};
+		F24B5E412F7D6055006E2150 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = F24B5D7B2F7D6054006E2150 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = F24B5E102F7D6055006E2150;
+			remoteInfo = "thane-portbroker";
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		F24B5D832F7D6054006E2150 /* thane-agent-macos.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "thane-agent-macos.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F24B5D922F7D6055006E2150 /* thane-agent-macosTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "thane-agent-macosTests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
 		F24B5D9C2F7D6055006E2150 /* thane-agent-macosUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = "thane-agent-macosUITests.xctest"; sourceTree = BUILT_PRODUCTS_DIR; };
+		F24B5E012F7D6055006E2150 /* thane-portbroker */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "thane-portbroker"; sourceTree = BUILT_PRODUCTS_DIR; };
+		F24B5E042F7D6055006E2150 /* info.nugget.thane-agent-macos.portbroker.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "PortBrokerSupport/info.nugget.thane-agent-macos.portbroker.plist"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -43,6 +82,16 @@
 		F24B5D9F2F7D6055006E2150 /* thane-agent-macosUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = "thane-agent-macosUITests";
+			sourceTree = "<group>";
+		};
+		F24B5E022F7D6055006E2150 /* thane-portbroker */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = "thane-portbroker";
+			sourceTree = "<group>";
+		};
+		F24B5E032F7D6055006E2150 /* PortBrokerShared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = PortBrokerShared;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -69,6 +118,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F24B5E122F7D6055006E2150 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -78,6 +134,9 @@
 				F24B5D852F7D6054006E2150 /* thane-agent-macos */,
 				F24B5D952F7D6055006E2150 /* thane-agent-macosTests */,
 				F24B5D9F2F7D6055006E2150 /* thane-agent-macosUITests */,
+				F24B5E022F7D6055006E2150 /* thane-portbroker */,
+				F24B5E032F7D6055006E2150 /* PortBrokerShared */,
+				F24B5E042F7D6055006E2150 /* info.nugget.thane-agent-macos.portbroker.plist */,
 				F24B5D842F7D6054006E2150 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -88,6 +147,7 @@
 				F24B5D832F7D6054006E2150 /* thane-agent-macos.app */,
 				F24B5D922F7D6055006E2150 /* thane-agent-macosTests.xctest */,
 				F24B5D9C2F7D6055006E2150 /* thane-agent-macosUITests.xctest */,
+				F24B5E012F7D6055006E2150 /* thane-portbroker */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -102,13 +162,17 @@
 				F24B5D7F2F7D6054006E2150 /* Sources */,
 				F24B5D802F7D6054006E2150 /* Frameworks */,
 				F24B5D812F7D6054006E2150 /* Resources */,
+				F24B5E302F7D6055006E2150 /* Embed Port Broker */,
+				F24B5E322F7D6055006E2150 /* Embed LaunchDaemon */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				F24B5E402F7D6055006E2150 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				F24B5D852F7D6054006E2150 /* thane-agent-macos */,
+				F24B5E032F7D6055006E2150 /* PortBrokerShared */,
 			);
 			name = "thane-agent-macos";
 			packageProductDependencies = (
@@ -163,6 +227,28 @@
 			productReference = F24B5D9C2F7D6055006E2150 /* thane-agent-macosUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		F24B5E102F7D6055006E2150 /* thane-portbroker */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F24B5E202F7D6055006E2150 /* Build configuration list for PBXNativeTarget "thane-portbroker" */;
+			buildPhases = (
+				F24B5E112F7D6055006E2150 /* Sources */,
+				F24B5E122F7D6055006E2150 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				F24B5E022F7D6055006E2150 /* thane-portbroker */,
+				F24B5E032F7D6055006E2150 /* PortBrokerShared */,
+			);
+			name = "thane-portbroker";
+			packageProductDependencies = (
+			);
+			productName = "thane-portbroker";
+			productReference = F24B5E012F7D6055006E2150 /* thane-portbroker */;
+			productType = "com.apple.product-type.tool";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -184,6 +270,9 @@
 						CreatedOnToolsVersion = 26.4;
 						TestTargetID = F24B5D822F7D6054006E2150;
 					};
+					F24B5E102F7D6055006E2150 = {
+						CreatedOnToolsVersion = 26.6;
+					};
 				};
 			};
 			buildConfigurationList = F24B5D7E2F7D6054006E2150 /* Build configuration list for PBXProject "thane-agent-macos" */;
@@ -203,6 +292,7 @@
 				F24B5D822F7D6054006E2150 /* thane-agent-macos */,
 				F24B5D912F7D6055006E2150 /* thane-agent-macosTests */,
 				F24B5D9B2F7D6055006E2150 /* thane-agent-macosUITests */,
+				F24B5E102F7D6055006E2150 /* thane-portbroker */,
 			);
 		};
 /* End PBXProject section */
@@ -253,6 +343,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		F24B5E112F7D6055006E2150 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -265,6 +362,11 @@
 			isa = PBXTargetDependency;
 			target = F24B5D822F7D6054006E2150 /* thane-agent-macos */;
 			targetProxy = F24B5D9D2F7D6055006E2150 /* PBXContainerItemProxy */;
+		};
+		F24B5E402F7D6055006E2150 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = F24B5E102F7D6055006E2150 /* thane-portbroker */;
+			targetProxy = F24B5E412F7D6055006E2150 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -539,6 +641,44 @@
 			};
 			name = Release;
 		};
+		F24B5E212F7D6055006E2150 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9KR5L363XM;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.0.2;
+				PRODUCT_BUNDLE_IDENTIFIER = "info.nugget.thane-agent-macos.portbroker";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "PortBrokerSupport/PortBroker-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		F24B5E222F7D6055006E2150 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 9KR5L363XM;
+				ENABLE_HARDENED_RUNTIME = YES;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 0.0.2;
+				PRODUCT_BUNDLE_IDENTIFIER = "info.nugget.thane-agent-macos.portbroker";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = "PortBrokerSupport/PortBroker-Bridging-Header.h";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -574,6 +714,15 @@
 			buildConfigurations = (
 				F24B5DAD2F7D6055006E2150 /* Debug */,
 				F24B5DAE2F7D6055006E2150 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		F24B5E202F7D6055006E2150 /* Build configuration list for PBXNativeTarget "thane-portbroker" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F24B5E212F7D6055006E2150 /* Debug */,
+				F24B5E222F7D6055006E2150 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

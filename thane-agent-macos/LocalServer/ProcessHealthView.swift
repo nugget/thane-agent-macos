@@ -206,6 +206,14 @@ struct ProcessHealthView: View {
                     )
                 }
 
+                Divider()
+                trustRow(
+                    title: "Privileged Ports",
+                    detail: manager.portBrokerSummary.detail,
+                    icon: portBrokerIcon,
+                    tint: portBrokerTint
+                )
+
                 if manager.versionIncompatible {
                     Divider()
                     trustRow(
@@ -227,6 +235,22 @@ struct ProcessHealthView: View {
                 }
             }
             .padding(.top, 4)
+        }
+    }
+
+    private var portBrokerIcon: String {
+        switch manager.portBrokerSummary {
+        case .inherited: "lock.shield.fill"
+        case .notEnabled: "lock.open"
+        case .fallback: "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var portBrokerTint: Color {
+        switch manager.portBrokerSummary {
+        case .inherited: .green
+        case .notEnabled: .secondary
+        case .fallback: .orange
         }
     }
 
