@@ -36,11 +36,16 @@ struct PortBrokerTests {
         #expect(pipe(&a) == 0)
         #expect(pipe(&b) == 0)
         defer { for fd in a + b { close(fd) } }
-        // Something extra the child must not see.
-        var stray: [Int32] = [0, 0]
-        #expect(pipe(&stray) == 0)
-        _ = fcntl(stray[0], F_SETFD, 0) // explicitly inheritable if the spawn were sloppy
-        defer { for fd in stray { close(fd) } }
+        // Something extra the child must not see, parked at a descriptor
+        // number the shell will never reach on its own, so its absence in
+        // the child proves close-on-exec rather than luck.
+        var strayPipe: [Int32] = [0, 0]
+        #expect(pipe(&strayPipe) == 0)
+        defer { for fd in strayPipe { close(fd) } }
+        let canary = fcntl(strayPipe[0], F_DUPFD, 200)
+        #expect(canary >= 200)
+        defer { close(canary) }
+        _ = fcntl(canary, F_SETFD, 0) // explicitly inheritable if the spawn were sloppy
 
         let out = Pipe()
         let err = Pipe()
@@ -73,9 +78,8 @@ struct PortBrokerTests {
         // listing; anything in the parent's range crossed the exec, which
         // close-on-exec-by-default forbids. The stray pipe sits well above
         // that in a GUI host, so it is the canary.
-        #expect(stray[0] > 9, "test precondition: stray pipe should not land in the shell's own range")
         #expect(fds.filter { $0 > 9 }.isEmpty, "descriptors leaked into the child: \(fds)")
-        #expect(!fds.contains(stray[0]), "the stray inheritable pipe crossed into the child")
+        #expect(!fds.contains(canary), "the canary descriptor \(canary) crossed into the child")
         #expect(lines.last == "2|https:http|pid-ok", "environment line: \(lines.last ?? "")")
     }
 

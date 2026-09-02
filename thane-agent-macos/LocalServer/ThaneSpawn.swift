@@ -72,31 +72,34 @@ nonisolated enum ThaneSpawn {
         }
         defer { for fd in parked { close(fd) } }
 
+        // Every setup call is checked: a file action that silently failed
+        // to register would let posix_spawn succeed without the promised
+        // streams or listener layout, which is worse than not starting.
         var actions: posix_spawn_file_actions_t?
-        _ = posix_spawn_file_actions_init(&actions)
+        try check(posix_spawn_file_actions_init(&actions), "posix_spawn_file_actions_init")
         defer { _ = posix_spawn_file_actions_destroy(&actions) }
-        _ = posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0)
-        _ = posix_spawn_file_actions_adddup2(&actions, stdout, 1)
-        _ = posix_spawn_file_actions_adddup2(&actions, stderr, 2)
+        try check(posix_spawn_file_actions_addopen(&actions, 0, "/dev/null", O_RDONLY, 0), "addopen stdin")
+        try check(posix_spawn_file_actions_adddup2(&actions, stdout, 1), "adddup2 stdout")
+        try check(posix_spawn_file_actions_adddup2(&actions, stderr, 2), "adddup2 stderr")
         for (index, fd) in parked.enumerated() {
-            _ = posix_spawn_file_actions_adddup2(&actions, fd, Int32(3 + index))
+            try check(posix_spawn_file_actions_adddup2(&actions, fd, Int32(3 + index)), "adddup2 listener \(index)")
         }
-        _ = posix_spawn_file_actions_addchdir_np(&actions, workingDirectory.path)
+        try check(posix_spawn_file_actions_addchdir_np(&actions, workingDirectory.path), "addchdir")
 
         var attrs: posix_spawnattr_t?
-        _ = posix_spawnattr_init(&attrs)
+        try check(posix_spawnattr_init(&attrs), "posix_spawnattr_init")
         defer { _ = posix_spawnattr_destroy(&attrs) }
         // Reset every signal disposition and clear the signal mask. Both
         // are inherited across exec, and a supervisor that has SIGTERM
         // blocked or ignored (as a GUI app under a debugger or test runner
         // can) would otherwise hand Thane a child it can never stop.
-        _ = posix_spawnattr_setflags(&attrs, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
+        try check(posix_spawnattr_setflags(&attrs, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK)), "setflags")
         var all = sigset_t()
         _ = sigfillset(&all)
-        _ = posix_spawnattr_setsigdefault(&attrs, &all)
+        try check(posix_spawnattr_setsigdefault(&attrs, &all), "setsigdefault")
         var none = sigset_t()
         _ = sigemptyset(&none)
-        _ = posix_spawnattr_setsigmask(&attrs, &none)
+        try check(posix_spawnattr_setsigmask(&attrs, &none), "setsigmask")
 
         var env = environment
         for (key, value) in listenEnvironment(names: inherited.map(\.name)) {
@@ -119,6 +122,11 @@ nonisolated enum ThaneSpawn {
         guard rc == 0 else { throw SpawnError.system("posix_spawn", rc) }
         log.info("spawned \(executable.lastPathComponent, privacy: .public) pid \(pid) with \(inherited.count) inherited listener(s)")
         return pid
+    }
+
+    /// Turns a posix_spawn setup return code into a thrown error.
+    private static func check(_ rc: Int32, _ what: String) throws {
+        if rc != 0 { throw SpawnError.system(what, rc) }
     }
 
     enum SpawnError: Error, LocalizedError {

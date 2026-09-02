@@ -242,7 +242,9 @@ struct ProcessHealthView: View {
         switch manager.portBrokerSummary {
         case .inherited: "lock.shield.fill"
         case .notEnabled: "lock.open"
-        case .fallback: "exclamationmark.triangle.fill"
+        case .requiresApproval: "person.crop.circle.badge.exclamationmark"
+        case .notFound: "questionmark.diamond"
+        case .partial, .fallback: "exclamationmark.triangle.fill"
         }
     }
 
@@ -250,7 +252,7 @@ struct ProcessHealthView: View {
         switch manager.portBrokerSummary {
         case .inherited: .green
         case .notEnabled: .secondary
-        case .fallback: .orange
+        case .requiresApproval, .notFound, .partial, .fallback: .orange
         }
     }
 

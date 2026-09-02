@@ -24,6 +24,25 @@ nonisolated enum PortBroker {
     /// state in which asking it for sockets can succeed.
     static var isEnabled: Bool { status == .enabled }
 
+    /// The registration state without the ServiceManagement import, for
+    /// the supervisor to report exactly.
+    nonisolated enum Registration: Equatable, Sendable {
+        case notRegistered
+        case requiresApproval
+        case enabled
+        case notFound
+    }
+
+    static var registration: Registration {
+        switch status {
+        case .enabled: .enabled
+        case .requiresApproval: .requiresApproval
+        case .notFound: .notFound
+        case .notRegistered: .notRegistered
+        @unknown default: .notRegistered
+        }
+    }
+
     static func register() throws {
         try service.register()
         log.info("port broker registered: \(String(describing: service.status), privacy: .public)")
@@ -40,24 +59,38 @@ nonisolated enum PortBroker {
     static func fetchListeners(timeout: Duration = .seconds(4)) async throws -> (handles: [String: FileHandle], detail: String?) {
         try await withThrowingTaskGroup(of: (handles: [String: FileHandle], detail: String?).self) { group in
             group.addTask {
-                try await withCheckedThrowingContinuation { continuation in
-                    let connection = NSXPCConnection(machServiceName: PortBrokerContract.machServiceName, options: .privileged)
-                    connection.remoteObjectInterface = PortBrokerContract.interface()
-                    let exchange = BrokerExchange(continuation: continuation, connection: connection)
-                    connection.invalidationHandler = {
-                        exchange.finish(throwing: PortBrokerError.unavailable("the port broker connection was invalidated"))
+                // The timeout task cancels this one; cancellation must
+                // complete the exchange (and invalidate the connection) or
+                // the group would wait forever on a daemon that never
+                // answers.
+                let slot = ExchangeSlot()
+                return try await withTaskCancellationHandler {
+                    try await withCheckedThrowingContinuation { continuation in
+                        let connection = NSXPCConnection(machServiceName: PortBrokerContract.machServiceName, options: .privileged)
+                        connection.remoteObjectInterface = PortBrokerContract.interface()
+                        let exchange = BrokerExchange(continuation: continuation, connection: connection)
+                        guard slot.install(exchange) else {
+                            // Cancelled before we got here.
+                            exchange.finish(throwing: CancellationError())
+                            return
+                        }
+                        connection.invalidationHandler = {
+                            exchange.finish(throwing: PortBrokerError.unavailable("the port broker connection was invalidated"))
+                        }
+                        connection.resume()
+                        let proxy = connection.remoteObjectProxyWithErrorHandler { error in
+                            exchange.finish(throwing: PortBrokerError.unavailable(error.localizedDescription))
+                        }
+                        guard let broker = proxy as? PortBrokerProtocol else {
+                            exchange.finish(throwing: PortBrokerError.unavailable("the port broker proxy has the wrong type"))
+                            return
+                        }
+                        broker.listeners { handles, detail in
+                            exchange.finish(returning: (handles ?? [:], detail))
+                        }
                     }
-                    connection.resume()
-                    let proxy = connection.remoteObjectProxyWithErrorHandler { error in
-                        exchange.finish(throwing: PortBrokerError.unavailable(error.localizedDescription))
-                    }
-                    guard let broker = proxy as? PortBrokerProtocol else {
-                        exchange.finish(throwing: PortBrokerError.unavailable("the port broker proxy has the wrong type"))
-                        return
-                    }
-                    broker.listeners { handles, detail in
-                        exchange.finish(returning: (handles ?? [:], detail))
-                    }
+                } onCancel: {
+                    slot.cancel()
                 }
             }
             group.addTask {
@@ -78,6 +111,31 @@ enum PortBrokerError: Error, LocalizedError {
         switch self {
         case .unavailable(let why): why
         }
+    }
+}
+
+/// Hands the in-flight exchange to the cancellation handler, whichever of
+/// the two arrives first.
+nonisolated private final class ExchangeSlot: @unchecked Sendable {
+    private let lock = NSLock()
+    private var exchange: BrokerExchange?
+    private var cancelled = false
+
+    /// Records the exchange; returns false if cancellation already came.
+    func install(_ exchange: BrokerExchange) -> Bool {
+        lock.lock(); defer { lock.unlock() }
+        if cancelled { return false }
+        self.exchange = exchange
+        return true
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let pending = exchange
+        exchange = nil
+        lock.unlock()
+        pending?.finish(throwing: CancellationError())
     }
 }
 

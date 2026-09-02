@@ -44,10 +44,12 @@ final class Broker: NSObject, PortBrokerProtocol, @unchecked Sendable {
         reply(cached.isEmpty ? nil : cached, failures.isEmpty ? nil : failures.joined(separator: "; "))
     }
 
-    /// Asks launchd for the descriptors behind one `Sockets` entry and
-    /// picks the one to hand over. launchd may create one socket per
-    /// address family; a dual-stack IPv6 socket serves both, so it wins,
-    /// otherwise the IPv4 one does. Descriptors not chosen are closed so
+    /// Asks launchd for the descriptors behind one `Sockets` entry. The
+    /// plist requests `IPv4v6`, which launchd.plist(5) documents as a
+    /// single socket that listens for both families, and Thane's contract
+    /// takes one descriptor per name; anything other than exactly one is
+    /// therefore a misconfiguration that is reported rather than resolved
+    /// by silently dropping a family, and every descriptor is closed so
     /// nothing bound is left unaccepted.
     private static func activate(_ name: String) -> Result<FileHandle, ActivationFailure> {
         // launch_activate_socket wants an int** it can point at a malloc'd
@@ -65,38 +67,11 @@ final class Broker: NSObject, PortBrokerProtocol, @unchecked Sendable {
             return .failure(ActivationFailure(reason: "launchd returned no sockets"))
         }
         let all = (0..<count).map { fds[$0] }
-        let chosen = choose(all)
-        for fd in all where fd != chosen {
-            close(fd)
+        guard all.count == 1 else {
+            for fd in all { close(fd) }
+            return .failure(ActivationFailure(reason: "launchd returned \(all.count) sockets; expected the single dual-stack socket SockFamily IPv4v6 declares"))
         }
-        return .success(FileHandle(fileDescriptor: chosen, closeOnDealloc: false))
-    }
-
-    static func choose(_ fds: [Int32]) -> Int32 {
-        if fds.count == 1 { return fds[0] }
-        var dualStack: Int32?
-        var v4: Int32?
-        for fd in fds {
-            var addr = sockaddr_storage()
-            var len = socklen_t(MemoryLayout<sockaddr_storage>.size)
-            let ok = withUnsafeMutablePointer(to: &addr) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) == 0 }
-            }
-            guard ok else { continue }
-            switch Int32(addr.ss_family) {
-            case AF_INET6:
-                var only: Int32 = 1
-                var olen = socklen_t(MemoryLayout<Int32>.size)
-                if getsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &only, &olen) == 0, only == 0 {
-                    dualStack = fd
-                }
-            case AF_INET:
-                v4 = v4 ?? fd
-            default:
-                break
-            }
-        }
-        return dualStack ?? v4 ?? fds[0]
+        return .success(FileHandle(fileDescriptor: all[0], closeOnDealloc: false))
     }
 }
 

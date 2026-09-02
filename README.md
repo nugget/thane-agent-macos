@@ -132,8 +132,10 @@ descriptors to the daemon. The daemon's only job is to pass them over XPC
 to this app, after checking the app's code signature, and the app starts
 Thane with them at descriptors 3 and 4 under the systemd socket-activation
 contract (`LISTEN_FDS`, `LISTEN_FDNAMES=https:http`) that Thane's front
-door reads. Thane never runs with privilege; a Thane restart drops no
-connections, because launchd still owns the socket. If the daemon is not
+door reads. Thane never runs with privilege. Because launchd still owns the
+listening socket, connection attempts that arrive while Thane restarts
+wait in its backlog for the new process rather than being refused;
+connections Thane had already accepted still close with it. If the daemon is not
 registered, not yet approved, or unreachable, Thane starts on its
 configured ports and Process Health says why.
 
