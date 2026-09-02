@@ -4,6 +4,7 @@ import SwiftUI
 struct MenuBarView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     private var manager: BinaryManager { appState.binaryManager }
 
@@ -48,7 +49,8 @@ struct MenuBarView: View {
         if appState.updateAvailable || appState.appUpdateAvailable {
             Divider()
             Button("Updates Available…", systemImage: "arrow.down.circle.fill") {
-                showSettings()
+                activate()
+                openSettings()
             }
         }
 
@@ -59,8 +61,9 @@ struct MenuBarView: View {
         }
 
         Button("Thane Settings…", systemImage: "gearshape.2") {
+            activate()
             appState.selectedSettingsTab = .agent
-            showSettings()
+            openSettings()
         }
         .keyboardShortcut(",", modifiers: [.command, .option])
 
@@ -109,8 +112,4 @@ struct MenuBarView: View {
         NSApp.activate()
     }
 
-    private func showSettings() {
-        activate()
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-    }
 }

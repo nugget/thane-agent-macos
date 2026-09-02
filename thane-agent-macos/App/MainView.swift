@@ -4,6 +4,7 @@ import SwiftUI
 struct MainView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @Query(filter: #Predicate<ServerConfig> { $0.isDefault }) private var defaultConfigs: [ServerConfig]
 
     @State private var selectedConversation: Conversation?
@@ -54,6 +55,10 @@ struct MainView: View {
             appState.registerProcessHealthWindowOpener {
                 openWindow(id: "process-health")
             }
+            // The Settings scene can only be opened through SwiftUI's
+            // action, which lives in a view's environment; hand it to
+            // AppState so the menu bar and notifications can use it too.
+            appState.registerSettingsOpener { openSettings() }
             appState.openDashboardWindow = { openWindow(id: "dashboard") }
             // The unit-test bundle is injected into the application process.
             // Do not activate the operator's persisted server in that host:
@@ -90,8 +95,8 @@ struct MainView: View {
             } else {
                 HStack(spacing: 10) {
                     Button("Thane Settings…", systemImage: "gearshape") {
-                        appState.selectedSettingsTab = .agent
-                        showSettings()
+                        NSApp.activate()
+                        appState.showSettings(tab: .agent)
                     }
                     .buttonStyle(.borderedProminent)
 
@@ -118,11 +123,6 @@ struct MainView: View {
             return "Thane needs attention before you can continue."
         }
         return "Thane is unavailable. Review its settings to get connected."
-    }
-
-    private func showSettings() {
-        NSApp.activate()
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
     }
 
     private func migrateLegacyConfigurationIfNeeded() {

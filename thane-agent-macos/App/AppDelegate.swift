@@ -162,7 +162,6 @@ extension AppDelegate: @preconcurrency UNUserNotificationCenterDelegate {
     private func showNotificationSettings() {
         NSApp.activate()
         appState?.selectConfiguration(.managed)
-        appState?.selectedSettingsTab = .agent
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        appState?.showSettings(tab: .agent)
     }
 }

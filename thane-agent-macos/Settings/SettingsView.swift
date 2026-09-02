@@ -331,6 +331,8 @@ struct LocalServerSettingsView: View {
                 Text("Loading an arbitrary config bypasses Thane’s trust boundary, so recovery mode remains an explicit command-line operation rather than a persistent app preference.")
             }
 
+            PrivilegedPortsSection()
+
             Section("Binary Updates") {
                 UpdateSettingsSection()
             }
@@ -1241,27 +1243,6 @@ struct FileAccessSettingsView: View {
 struct GeneralSettingsView: View {
     @Environment(AppState.self) private var appState
     @State private var loginItemStatus = SMAppService.mainApp.status
-    @State private var portBrokerStatus = PortBroker.status
-    @State private var portBrokerError: String?
-
-    private var portBrokerBinding: Binding<Bool> {
-        Binding(
-            get: { portBrokerStatus == .enabled || portBrokerStatus == .requiresApproval },
-            set: { enable in
-                do {
-                    portBrokerError = nil
-                    if enable {
-                        try PortBroker.register()
-                    } else {
-                        try PortBroker.unregister()
-                    }
-                } catch {
-                    portBrokerError = error.localizedDescription
-                }
-                portBrokerStatus = PortBroker.status
-            }
-        )
-    }
 
     private var launchAtLoginBinding: Binding<Bool> {
         Binding(
@@ -1303,32 +1284,6 @@ struct GeneralSettingsView: View {
             }
 
             Section {
-                Toggle("Hold ports 443 and 80 for Thane", isOn: portBrokerBinding)
-                if portBrokerStatus == .requiresApproval {
-                    HStack(spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .foregroundStyle(.yellow)
-                        Text("Approval required in System Settings → General → Login Items & Extensions.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Button("Open…") {
-                            SMAppService.openSystemSettingsLoginItems()
-                        }
-                        .font(.caption)
-                    }
-                }
-                if let portBrokerError {
-                    Text(portBrokerError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-            } header: {
-                Text("Privileged Ports")
-            } footer: {
-                Text("macOS refuses ports below 1024 to ordinary users. This registers a small daemon under this app's name so launchd binds 443 and 80 at boot and hands them to Thane's HTTPS front door; Thane itself never runs with privilege. Takes effect the next time Thane starts.")
-            }
-
-            Section {
                 Picker("Menu bar", selection: $appState.menuBarTextStyle) {
                     ForEach(MenuBarTextStyle.allCases) { style in
                         Text(style.title).tag(style)
@@ -1345,9 +1300,6 @@ struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear {
-            loginItemStatus = SMAppService.mainApp.status
-            portBrokerStatus = PortBroker.status
-        }
+        .onAppear { loginItemStatus = SMAppService.mainApp.status }
     }
 }
