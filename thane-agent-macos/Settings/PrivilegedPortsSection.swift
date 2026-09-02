@@ -33,7 +33,7 @@ struct PrivilegedPortsSection: View {
                     self.error = error.localizedDescription
                 }
                 status = PortBroker.status
-                scheduleRechecks()
+                scheduleRechecks(wanting: enable)
             }
         )
     }
@@ -76,16 +76,18 @@ struct PrivilegedPortsSection: View {
         .onDisappear { recheck?.cancel() }
     }
 
-    /// Re-reads the status at the delays in `PortBrokerRecheck.delays`,
-    /// stopping early once the answer is settled.
-    private func scheduleRechecks() {
+    /// Re-reads the status at the deadlines in `PortBrokerRecheck.deadlines`
+    /// (measured from the toggle, so each sleep is only the gap since the
+    /// previous look), stopping early once the status has reached what the
+    /// toggle asked for.
+    private func scheduleRechecks(wanting enabled: Bool) {
         recheck?.cancel()
         recheck = Task { @MainActor in
-            for delay in PortBrokerRecheck.delays {
-                try? await Task.sleep(for: delay)
+            for gap in PortBrokerRecheck.intervals {
+                try? await Task.sleep(for: gap)
                 if Task.isCancelled { return }
                 status = PortBroker.status
-                if PortBrokerRecheck.isSettled(status) { return }
+                if PortBrokerRecheck.isSettled(status, wanting: enabled) { return }
             }
         }
     }
@@ -94,19 +96,32 @@ struct PrivilegedPortsSection: View {
 /// The re-check schedule after the toggle is used, kept as data so it can
 /// be tested and tuned without touching the view.
 nonisolated enum PortBrokerRecheck {
-    /// Background Task Management wrote its record roughly thirty seconds
-    /// after registration on the operator's machine; the schedule covers
-    /// that with a few early looks for the fast case.
-    static let delays: [Duration] = [.seconds(1), .seconds(3), .seconds(10), .seconds(30), .seconds(60)]
+    /// Elapsed time after the toggle at which to look again. Background
+    /// Task Management wrote its record roughly thirty seconds after
+    /// registration on the operator's machine; the schedule covers that
+    /// with a few early looks for the fast case.
+    static let deadlines: [Duration] = [.seconds(1), .seconds(3), .seconds(10), .seconds(30), .seconds(60)]
 
-    /// A settled status is one no amount of waiting will change without
-    /// the operator acting: enabled or not registered. Awaiting approval
-    /// and not-found are the states worth polling out of.
-    static func isSettled(_ status: SMAppService.Status) -> Bool {
-        switch status {
-        case .enabled, .notRegistered: true
-        case .requiresApproval, .notFound: false
-        @unknown default: true
+    /// The gaps to sleep between looks, so the looks land on the deadlines
+    /// rather than on their running sum.
+    static var intervals: [Duration] {
+        var previous = Duration.zero
+        return deadlines.map { deadline in
+            defer { previous = deadline }
+            return deadline - previous
+        }
+    }
+
+    /// Whether the status has reached what the toggle asked for. Right after
+    /// register() the status can still read not-registered until Background
+    /// Task Management writes its record, and right after unregister() it
+    /// can still read enabled, so the resting state depends on the request:
+    /// enabled when turning on, not registered when turning off. Anything
+    /// else is worth another look.
+    static func isSettled(_ status: SMAppService.Status, wanting enabled: Bool) -> Bool {
+        switch (status, enabled) {
+        case (.enabled, true), (.notRegistered, false): true
+        default: false
         }
     }
 }
