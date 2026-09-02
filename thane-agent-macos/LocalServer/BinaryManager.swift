@@ -600,7 +600,52 @@ final class BinaryManager {
     /// True when the running binary's major version doesn't match the app's.
     private(set) var versionIncompatible = false
 
-    private var process: Process?
+    private var process: SpawnedProcess?
+
+    /// What the port broker contributed to the current or last launch, for
+    /// Process Health: inherited privileged ports, or why Thane is binding
+    /// its own.
+    private(set) var portBrokerSummary = PortBrokerSummary.notEnabled
+
+    nonisolated enum PortBrokerSummary: Equatable, Sendable {
+        /// Never registered: the operator has not asked for it.
+        case notEnabled
+        /// Registered, waiting on the one-time approval in System Settings.
+        case requiresApproval
+        /// Registered once, but the daemon is no longer in the bundle.
+        case notFound
+        /// Every expected socket arrived and Thane serves on them.
+        case inherited(names: [String])
+        /// Some sockets arrived; the missing ones bind from config, and the
+        /// daemon's own explanation is kept.
+        case partial(names: [String], missing: [String], detail: String)
+        /// The daemon was expected and could not deliver.
+        case fallback(String)
+
+        var detail: String {
+            switch self {
+            case .notEnabled:
+                "Not enabled; Thane binds the ports in its config. Enable the port broker in Settings to let launchd hold 443 and 80."
+            case .requiresApproval:
+                "Registered but not yet approved: allow it under System Settings → General → Login Items & Extensions. Until then Thane binds the ports in its config."
+            case .notFound:
+                "Registered, but the daemon is missing from this app bundle; re-register from Settings. Thane binds the ports in its config."
+            case .inherited(let names):
+                "launchd holds \(names.joined(separator: " and ")); Thane serves on the inherited sockets."
+            case .partial(let names, let missing, let detail):
+                "launchd handed over \(names.joined(separator: " and ")) but not \(missing.joined(separator: " and ")) (\(detail)); Thane binds the missing ports from its config."
+            case .fallback(let why):
+                "\(why) Thane binds the ports in its config instead."
+            }
+        }
+
+        var isHealthy: Bool {
+            switch self {
+            case .notEnabled, .inherited: true
+            case .requiresApproval, .notFound, .partial, .fallback: false
+            }
+        }
+    }
     private var stdoutPipe: Pipe?
     private var stderrPipe: Pipe?
     private var stdoutRemainder = ""
@@ -789,15 +834,51 @@ final class BinaryManager {
 
     private func launchServe(binaryURL: URL) {
         guard shouldRun, state == .starting else { return }
-        let proc = Process()
-        proc.executableURL = binaryURL
-        proc.currentDirectoryURL = workspaceURL
-        proc.arguments = ThaneInvocation.serveArguments(workspace: workspaceURL)
+        // Ask the port broker for launchd's sockets first. The daemon only
+        // answers when the operator registered and approved it; otherwise
+        // Thane binds its own ports and Process Health says why.
+        let registration = PortBroker.registration
+        startTask = Task { [weak self] in
+            var inherited: [ThaneSpawn.Inherited] = []
+            var summary: PortBrokerSummary
+            var handles: [String: FileHandle] = [:]
+            switch registration {
+            case .notRegistered:
+                summary = .notEnabled
+            case .requiresApproval:
+                summary = .requiresApproval
+            case .notFound:
+                summary = .notFound
+            case .enabled:
+                do {
+                    let result = try await PortBroker.fetchListeners()
+                    handles = result.handles
+                    let names = PortBrokerContract.socketNames.filter { handles[$0] != nil }
+                    let missing = PortBrokerContract.socketNames.filter { handles[$0] == nil }
+                    inherited = names.map { ThaneSpawn.Inherited(name: $0, descriptor: handles[$0]!.fileDescriptor) }
+                    if names.isEmpty {
+                        summary = .fallback("The port broker answered but had no sockets: \(result.detail ?? "no detail").")
+                    } else if !missing.isEmpty {
+                        summary = .partial(names: names, missing: missing, detail: result.detail ?? "no detail")
+                    } else {
+                        summary = .inherited(names: names)
+                    }
+                } catch {
+                    summary = .fallback("The port broker could not be reached: \(error.localizedDescription).")
+                }
+            }
+            guard let self, !Task.isCancelled, shouldRun, state == .starting else { return }
+            portBrokerSummary = summary
+            spawnServe(binaryURL: binaryURL, inherited: inherited, keepAlive: handles)
+        }
+    }
 
+    /// Starts the serve process. `keepAlive` holds the broker's file handles
+    /// until the spawn has duplicated them into the child.
+    private func spawnServe(binaryURL: URL, inherited: [ThaneSpawn.Inherited], keepAlive: [String: FileHandle]) {
+        guard shouldRun, state == .starting else { return }
         let out = Pipe()
         let err = Pipe()
-        proc.standardOutput = out
-        proc.standardError = err
         stdoutPipe = out
         stderrPipe = err
         stdoutRemainder.removeAll(keepingCapacity: true)
@@ -815,19 +896,38 @@ final class BinaryManager {
             Task { @MainActor [weak self] in self?.ingestProcessOutput(text, stream: .stderr) }
         }
 
-        proc.terminationHandler = { [weak self] p in
-            Task { @MainActor [weak self] in self?.handleTermination(code: p.terminationStatus) }
-        }
-
         do {
-            try proc.run()
+            let pid = try ThaneSpawn.spawn(
+                executable: binaryURL,
+                arguments: ThaneInvocation.serveArguments(workspace: workspaceURL),
+                workingDirectory: workspaceURL,
+                environment: ProcessInfo.processInfo.environment,
+                inherited: inherited,
+                stdout: out.fileHandleForWriting.fileDescriptor,
+                stderr: err.fileHandleForWriting.fileDescriptor
+            )
+            // The child holds its own copies now; the parent's ends of the
+            // stdio pipes and the broker's handles are no longer needed.
+            try? out.fileHandleForWriting.close()
+            try? err.fileHandleForWriting.close()
+            withExtendedLifetime(keepAlive) {}
+            let proc = SpawnedProcess(pid: pid) { [weak self] code in
+                Task { @MainActor [weak self] in self?.handleTermination(code: code) }
+            }
             process = proc
             startedAt = Date()
             restartAttempt = 0
-            state = .running(pid: proc.processIdentifier)
-            startStatsPolling(pid: proc.processIdentifier)
-            append("thane started (pid \(proc.processIdentifier))", level: .info)
-            logger.info("thane started, pid \(proc.processIdentifier)")
+            state = .running(pid: pid)
+            startStatsPolling(pid: pid)
+            switch portBrokerSummary {
+            case .inherited(let names):
+                append("thane started (pid \(pid)) with inherited \(names.joined(separator: ", ")) sockets from the port broker", level: .info)
+            case .partial(let names, let missing, _):
+                append("thane started (pid \(pid)) with inherited \(names.joined(separator: ", ")) from the port broker; \(missing.joined(separator: ", ")) not supplied", level: .warn)
+            default:
+                append("thane started (pid \(pid))", level: .info)
+            }
+            logger.info("thane started, pid \(pid)")
         } catch {
             state = .stopped
             append("Failed to start: \(error.localizedDescription)", level: .error)

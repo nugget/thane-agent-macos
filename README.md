@@ -119,3 +119,23 @@ Release notes and artifacts live at [Releases](https://github.com/nugget/thane-a
 ## License
 
 Apache 2.0 — aligned with [Thane](https://github.com/nugget/thane-ai-agent) and Home Assistant.
+
+## Privileged ports for Thane's HTTPS front door
+
+macOS refuses ports below 1024 to ordinary users, admin or not, and offers
+no capability to grant, so Thane cannot bind 443 or 80 itself. The
+companion bundles a small LaunchDaemon, `thane-portbroker`, and registers
+it through `SMAppService` from Settings → General → Privileged Ports. Its
+plist declares `Sockets` for 443 and 80, so launchd binds them as root at
+boot, whether or not the app is running, and hands the listening
+descriptors to the daemon. The daemon's only job is to pass them over XPC
+to this app, after checking the app's code signature, and the app starts
+Thane with them at descriptors 3 and 4 under the systemd socket-activation
+contract (`LISTEN_FDS`, `LISTEN_FDNAMES=https:http`) that Thane's front
+door reads. Thane never runs with privilege. Because launchd still owns the
+listening socket, connection attempts that arrive while Thane restarts
+wait in its backlog for the new process rather than being refused;
+connections Thane had already accepted still close with it. If the daemon is not
+registered, not yet approved, or unreachable, Thane starts on its
+configured ports and Process Health says why.
+

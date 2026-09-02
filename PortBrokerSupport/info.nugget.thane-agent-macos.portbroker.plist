@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>info.nugget.thane-agent-macos.portbroker</string>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/thane-portbroker</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>info.nugget.thane-agent-macos</string>
+	</array>
+	<key>MachServices</key>
+	<dict>
+		<key>info.nugget.thane-agent-macos.portbroker</key>
+		<true/>
+	</dict>
+	<key>Sockets</key>
+	<dict>
+		<key>https</key>
+		<dict>
+			<key>SockServiceName</key>
+			<string>443</string>
+			<key>SockType</key>
+			<string>stream</string>
+			<key>SockFamily</key>
+			<string>IPv4v6</string>
+		</dict>
+		<key>http</key>
+		<dict>
+			<key>SockServiceName</key>
+			<string>80</string>
+			<key>SockType</key>
+			<string>stream</string>
+			<key>SockFamily</key>
+			<string>IPv4v6</string>
+		</dict>
+	</dict>
+	<key>ProcessType</key>
+	<string>Adaptive</string>
+</dict>
+</plist>
