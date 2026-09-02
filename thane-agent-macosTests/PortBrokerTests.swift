@@ -18,7 +18,10 @@ struct PortBrokerTests {
         let env = ThaneSpawn.listenEnvironment(names: ["https", "http"])
         #expect(env["LISTEN_FDS"] == "2")
         #expect(env["LISTEN_FDNAMES"] == "https:http")
-        #expect(env["LISTEN_PID"] == nil, "posix_spawn cannot know the child's pid before the environment is fixed")
+        #expect(env["LISTEN_PID"] == nil, "LISTEN_PID is set by the trampoline from inside the child, not by the environment builder")
+        let hop = ThaneSpawn.trampoline(executable: URL(fileURLWithPath: "/opt/thane/bin/thane"), arguments: ["-workspace", "/w", "serve"])
+        #expect(hop.executable.path == "/bin/sh")
+        #expect(hop.arguments == ["-c", "LISTEN_PID=$$ exec \"$0\" \"$@\"", "/opt/thane/bin/thane", "-workspace", "/w", "serve"])
         let one = ThaneSpawn.listenEnvironment(names: ["https"])
         #expect(one["LISTEN_FDS"] == "1")
         #expect(one["LISTEN_FDNAMES"] == "https")
@@ -45,7 +48,9 @@ struct PortBrokerTests {
             executable: URL(fileURLWithPath: "/bin/sh"),
             // No pipeline inside the child: a shell pipe would leave its own
             // descriptors open in the listing and muddy the leak check.
-            arguments: ["-c", "[ -p /dev/fd/3 ] && [ -p /dev/fd/4 ] && echo pipes-at-3-and-4; ls /dev/fd; echo \"$LISTEN_FDS|$LISTEN_FDNAMES\""],
+            // Through the trampoline (sockets are handed down), so the
+            // child also proves LISTEN_PID names its own pid.
+            arguments: ["-c", "[ -p /dev/fd/3 ] && [ -p /dev/fd/4 ] && echo pipes-at-3-and-4; ls /dev/fd; echo \"$LISTEN_FDS|$LISTEN_FDNAMES|$([ \"$LISTEN_PID\" = \"$$\" ] && echo pid-ok)\""],
             workingDirectory: URL(fileURLWithPath: "/"),
             environment: ["PATH": "/usr/bin:/bin"],
             inherited: [
@@ -71,7 +76,7 @@ struct PortBrokerTests {
         #expect(stray[0] > 9, "test precondition: stray pipe should not land in the shell's own range")
         #expect(fds.filter { $0 > 9 }.isEmpty, "descriptors leaked into the child: \(fds)")
         #expect(!fds.contains(stray[0]), "the stray inheritable pipe crossed into the child")
-        #expect(lines.last == "2|https:http", "environment line: \(lines.last ?? "")")
+        #expect(lines.last == "2|https:http|pid-ok", "environment line: \(lines.last ?? "")")
     }
 
     @Test(.timeLimit(.minutes(1))) func spawnReportsExitCodeAndSignal() async throws {

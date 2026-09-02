@@ -20,15 +20,28 @@ nonisolated enum ThaneSpawn {
     }
 
     /// The `sd_listen_fds(3)` environment for the given names, in order.
-    /// `LISTEN_PID` is omitted: `posix_spawn` cannot know the child's pid
-    /// before the environment is fixed, and Thane treats its absence as
-    /// "no check" rather than "no handoff".
+    /// `LISTEN_PID` is not here because `posix_spawn` cannot know the
+    /// child's pid before the environment is fixed; the trampoline in
+    /// `trampoline(executable:arguments:)` sets it from inside the child,
+    /// which is how the contract's pid check is satisfied.
     static func listenEnvironment(names: [String]) -> [String: String] {
         guard !names.isEmpty else { return [:] }
         return [
             "LISTEN_FDS": String(names.count),
             "LISTEN_FDNAMES": names.joined(separator: ":"),
         ]
+    }
+
+    /// The command actually spawned when sockets are handed down: a shell
+    /// that sets `LISTEN_PID` to its own pid and then `exec`s Thane in
+    /// place, so Thane sees `LISTEN_PID` equal to its own pid, exactly as
+    /// under systemd. The exec keeps the pid, so the supervisor still
+    /// watches and signals Thane directly.
+    static func trampoline(executable: URL, arguments: [String]) -> (executable: URL, arguments: [String]) {
+        (
+            URL(fileURLWithPath: "/bin/sh"),
+            ["-c", "LISTEN_PID=$$ exec \"$0\" \"$@\"", executable.path] + arguments
+        )
     }
 
     /// Spawns `executable` with `arguments` in `workingDirectory`. stdout and
@@ -89,7 +102,11 @@ nonisolated enum ThaneSpawn {
         for (key, value) in listenEnvironment(names: inherited.map(\.name)) {
             env[key] = value
         }
-        let argv = [executable.path] + arguments
+        var launch = (executable: executable, arguments: arguments)
+        if !inherited.isEmpty {
+            launch = trampoline(executable: executable, arguments: arguments)
+        }
+        let argv = [launch.executable.path] + launch.arguments
         let cArgv = argv.map { strdup($0) } + [nil]
         let cEnv = env.map { strdup("\($0.key)=\($0.value)") } + [nil]
         defer {
@@ -98,7 +115,7 @@ nonisolated enum ThaneSpawn {
         }
 
         var pid: pid_t = 0
-        let rc = posix_spawn(&pid, executable.path, &actions, &attrs, cArgv, cEnv)
+        let rc = posix_spawn(&pid, launch.executable.path, &actions, &attrs, cArgv, cEnv)
         guard rc == 0 else { throw SpawnError.system("posix_spawn", rc) }
         log.info("spawned \(executable.lastPathComponent, privacy: .public) pid \(pid) with \(inherited.count) inherited listener(s)")
         return pid
