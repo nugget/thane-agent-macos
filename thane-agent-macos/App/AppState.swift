@@ -239,6 +239,8 @@ final class AppState {
     var openConsoleWindow: (() -> Void)?
     var openDashboardWindow: (() -> Void)?
     private var shouldOpenProcessHealth = false
+    private var openSettingsWindow: (() -> Void)?
+    private var shouldOpenSettings = false
 
     /// Base URL of the active Thane configuration.
     /// Used by the dashboard window without exposing where Thane is running.
@@ -365,6 +367,29 @@ final class AppState {
         } else {
             shouldOpenProcessHealth = true
         }
+    }
+
+    /// Opens the Settings scene on the given tab. The private
+    /// `showSettingsWindow:` selector this app once sent stopped working
+    /// in recent macOS; the supported route is SwiftUI's `openSettings`
+    /// action, which only a view can obtain, so the root view registers it
+    /// here and non-view callers (the menu bar, notifications) go through
+    /// this method. A request that arrives before registration is kept and
+    /// honoured when the opener appears.
+    func showSettings(tab: AppSettingsTab) {
+        selectedSettingsTab = tab
+        if let openSettingsWindow {
+            openSettingsWindow()
+        } else {
+            shouldOpenSettings = true
+        }
+    }
+
+    func registerSettingsOpener(_ opener: @escaping () -> Void) {
+        openSettingsWindow = opener
+        guard shouldOpenSettings else { return }
+        shouldOpenSettings = false
+        opener()
     }
 
     func registerProcessHealthWindowOpener(_ opener: @escaping () -> Void) {
